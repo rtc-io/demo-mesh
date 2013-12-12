@@ -1,0 +1,36 @@
+{
+  "name": "rtcio-demo-mesh",
+  "version": "0.0.0",
+  "description": "Demonstrating P2P state synchronization using rtc-mesh",
+  "main": "index.js",
+  "private": true,
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rtc-io/rtcio-demo-mesh.git"
+  },
+  "keywords": [
+    "webrtc",
+    "rtc.io",
+    "datachannel",
+    "p2p",
+    "scuttlebutt"
+  ],
+  "author": "Damon Oehlman <damon.oehlman@nicta.com.au>",
+  "license": "Apache 2.0",
+  "bugs": {
+    "url": "https://github.com/rtc-io/rtcio-demo-mesh/issues"
+  },
+  "homepage": "https://github.com/rtc-io/rtcio-demo-mesh",
+  "dependencies": {
+    "rtc-mesh": "0.0.2",
+    "handlebars": "~1.1.2",
+    "browserify-middleware": "~1.21.0",
+    "express": "~3.4.7",
+    "rtc-switchboard": "~0.4.1",
+    "crel": "~1.1.0",
+    "fui": "~0.1.0"
+  }
+}
