@@ -4,34 +4,40 @@ var fui = require('fui');
 var mesh = require('rtc-mesh');
 var lastPositions = {};
 var context = canvas.getContext('2d');
-
-function updateState(key, vec) {
-  var lastPos = lastPositions[key];
-
-  // if we have a last position, then move to that position and line to
-  // the new position
-  if (lastPos) {
-    context.beginPath();
-    context.moveTo(lastPos[0], lastPos[1]);
-    context.lineTo(vec[0], vec[1]);
-    context.stroke();
-  }
-
-  // update the last position
-  lastPositions[key] = vec;
-}
-
-// use the rtc.io test signaller
-mesh.use('http://rtc.io/switchboard/');
+var config = {
+  iceServers: [
+    { url: 'stun:stun.l.google.com:19302' }
+  ]
+};
 
 // join the mesh
-mesh.join('rtc-mesh-drawtest', function(err, peer) {
+mesh.join('rtc-mesh-drawtest', { config: config }, function(err, m) {
+
+  function updateState(key, vec) {
+    var lastPos;
+
+    lastPos = lastPositions[key];
+
+    // if we have a last position, then move to that position and line to
+    // the new position
+    if (lastPos && vec) {
+      context.beginPath();
+      context.moveTo(lastPos[0], lastPos[1]);
+      context.lineTo(vec[0], vec[1]);
+      context.stroke();
+    }
+
+    // update the last position
+    lastPositions[key] = vec;
+  }
+
   // when we get data updates write them to the screen
-  peer.data.on('change', updateState);
+  m.data.on('change', updateState);
 
   fui()
     .up(function() {
       this.state.down = false;
+      m.data.set(m.id, null);
     })
     .filter('canvas')
     .relative()
@@ -43,7 +49,7 @@ mesh.join('rtc-mesh-drawtest', function(err, peer) {
         return;
       }
 
-      peer.data.set(peer.id, [x, y]);
+      m.data.set(m.id, [x, y]);
     });
 });
 
@@ -51,3 +57,4 @@ mesh.join('rtc-mesh-drawtest', function(err, peer) {
 window.addEventListener('load', function() {
   document.body.appendChild(canvas);
 });
+
