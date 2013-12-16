@@ -5,7 +5,7 @@ var mesh = require('rtc-mesh');
 var lastPositions = {};
 var context = canvas.getContext('2d');
 
-function updateState(key, vec, source) {
+function updateState(key, vec) {
   var lastPos = lastPositions[key];
 
   // if we have a last position, then move to that position and line to
@@ -27,8 +27,7 @@ mesh.use('http://rtc.io/switchboard/');
 // join the mesh
 mesh.join('rtc-mesh-drawtest', function(err, peer) {
   // when we get data updates write them to the screen
-  peer.on('update', updateState);
-  peer.set('name', 'Fred');
+  peer.data.on('change', updateState);
 
   fui()
     .up(function() {
@@ -44,7 +43,7 @@ mesh.join('rtc-mesh-drawtest', function(err, peer) {
         return;
       }
 
-      peer.set(peer.id, [x, y]);
+      peer.data.set(peer.id, [x, y]);
     });
 });
 
