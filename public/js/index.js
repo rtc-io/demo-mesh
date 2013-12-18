@@ -1,7 +1,6 @@
 var mesh = require('rtc-mesh');
 var fabric = require('fabric').fabric;
 var crel = require('crel');
-var canvas = new fabric.Canvas('c');
 var uuid = require('uuid');
 var opts = {
   config: {
@@ -12,9 +11,7 @@ var opts = {
 // set this to true to update as moving, scaling, rotating events occur
 var dynamicUpdates = false;
 
-// join the mesh
-mesh.join('rtc-mesh-drawtest', opts, function(err, m) {
-
+function joined(err, m) {
   function addObject(obj, label) {
     // add the object to the canvas
     canvas.add(obj);
@@ -81,12 +78,30 @@ mesh.join('rtc-mesh-drawtest', opts, function(err, m) {
       return;
     }
 
+    addObject(new fabric.Text('hello', {
+      left: 210,
+      top: 100
+    }), 'testlabel');
+
     addObject(new fabric.Rect({
       left: 100,
       top: 100,
       fill: 'blue',
-      height: 200,
-      width: 200
+      height: 100,
+      width: 100
     }), 'startrect');
   });
-});
+}
+
+function initCanvas() {
+  document.body.appendChild(crel('canvas', {
+    id: 'c',
+    width: window.innerWidth,
+    height: window.innerHeight
+  }));
+
+  canvas = new fabric.Canvas('c');
+  mesh.join('rtc-mesh-drawtest', opts, joined);
+}
+
+window.onload = initCanvas;
