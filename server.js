@@ -10,6 +10,7 @@ app.set('port', 1337);
 app.use(app.router);
 
 app.use('/js', browserify(path.join(__dirname, 'public/js'), {
+  external: ['canvas'],
   minify: false,
   debug: true
 }));

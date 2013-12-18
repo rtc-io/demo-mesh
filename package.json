@@ -25,13 +25,15 @@
   },
   "homepage": "https://github.com/rtc-io/rtcio-demo-mesh",
   "dependencies": {
-    "rtc-mesh": "~0.2.0",
-    "handlebars": "~1.1.2",
+    "rtc-mesh": "~0.4.0",
     "browserify-middleware": "~1.21.0",
     "express": "~3.4.7",
-    "rtc-switchboard": "~0.4.1",
+    "rtc-switchboard": "~0.5.0",
     "crel": "~1.1.0",
     "fui": "~0.1.0",
-    "cog": "~0.4.1"
+    "cog": "~0.4.1",
+    "expiry-model": "~1.0.2",
+    "fabric": "~1.4.0",
+    "uuid": "~1.4.1"
   }
 }
