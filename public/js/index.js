@@ -24,7 +24,6 @@ mesh.join('rtc-mesh-drawtest', opts, function(err, m) {
   }
 
   function updateState(evt) {
-    // TODO: debounce
     if (evt.target && evt.target._label) {
       m.data.set(evt.target._label, evt.target.toJSON());
     }
@@ -57,12 +56,7 @@ mesh.join('rtc-mesh-drawtest', opts, function(err, m) {
     }
   }
 
-  canvas.on({
-    'object:moving': updateState,
-    'object:scaling': updateState,
-    'object:rotating': updateState
-  });
-
+  canvas.on('object:modified', updateState);
   m.data.on('update', remoteUpdate);
 
   m.on('sync', function() {
