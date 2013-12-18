@@ -9,6 +9,9 @@ var opts = {
   }
 };
 
+// set this to true to update as moving, scaling, rotating events occur
+var dynamicUpdates = false;
+
 // join the mesh
 mesh.join('rtc-mesh-drawtest', opts, function(err, m) {
 
@@ -24,6 +27,7 @@ mesh.join('rtc-mesh-drawtest', opts, function(err, m) {
   }
 
   function updateState(evt) {
+    // TODO: debounce
     if (evt.target && evt.target._label) {
       m.data.set(evt.target._label, evt.target.toJSON());
     }
@@ -57,6 +61,17 @@ mesh.join('rtc-mesh-drawtest', opts, function(err, m) {
   }
 
   canvas.on('object:modified', updateState);
+
+  // if dynamic updates are enabled then communicate changes
+  // as they are happening in the UI
+  if (dynamicUpdates) {
+    canvas.on({
+      'object:moving': updateState,
+      'object:scaling': updateState,
+      'object:rotating': updateState
+    });
+  }
+
   m.data.on('update', remoteUpdate);
 
   m.on('sync', function() {
