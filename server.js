@@ -6,7 +6,7 @@ var browserify = require('browserify-middleware');
 var path = require('path');
 var app = express();
 
-app.set('port', 1337);
+app.set('port', process.env.NODE_PORT || 3000);
 app.use(app.router);
 
 app.use('/js', browserify(path.join(__dirname, 'public/js'), {
@@ -34,5 +34,5 @@ server.listen(app.get('port'), function(err) {
     return console.log('Encountered error starting server: ', err);
   }
 
-  console.log('server running on port ' + app.get('port'));
+  console.log('server running at http://localhost:' + app.get('port') + '/');
 });
