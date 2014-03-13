@@ -1,4 +1,5 @@
 var mesh = require('rtc-mesh');
+var quickconnect = require('rtc-quickconnect');
 var loader = require('fdom/loader');
 var crel = require('crel');
 var uuid = require('uuid');
