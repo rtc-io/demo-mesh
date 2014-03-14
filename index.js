@@ -1,6 +1,28 @@
+/* jshint node: true */
+'use strict'
+
+/**
+  # rtc-mesh demo
+
+  This is a demonstration application that illustrates how
+  [rtc-mesh](https://github.com/rtc-io/rtc-mesh) can be used to assist
+  with managing shared client state using WebRTC data channels.
+
+  ## Running the Demo
+
+  If you wish to run this demo locally, then you can run the following:
+
+  ```
+  npm install beefy browserify -g
+
+  git clone
+  cd rtcio-demo-mesh
+  beefy index.js:bundle.js
+  ```
+**/
+
 var mesh = require('rtc-mesh');
 var quickconnect = require('rtc-quickconnect');
-var loader = require('fdom/loader');
 var crel = require('crel');
 var uuid = require('uuid');
 var opts = {
@@ -11,104 +33,112 @@ var opts = {
 };
 
 // set this to true to update as moving, scaling, rotating events occur
+var canvas;
 var dynamicUpdates = false;
 
-// cdn deps
-var cdndeps = [
-  '//cdnjs.cloudflare.com/ajax/libs/fabric.js/1.4.0/fabric.min.js'
-];
+// initialise the connection
+var qc = quickconnect('http://localhost:3000', {
+  room: 'rtcio-demo-mesh',
+  debug: true
+});
 
-function joined(err, m) {
-  function addObject(obj, label) {
-    // add the object to the canvas
-    canvas.add(obj);
+// create the shared model
+var model = mesh(qc);
 
-    // tag the object
-    obj._label = label || uuid.v4();
+function addObject(obj, label) {
+  // add the object to the canvas
+  canvas.add(obj);
 
-    // add the object into mesh data
-    m.data.set(obj._label, obj.toJSON());
+  // tag the object
+  obj._label = label || uuid.v4();
+
+  // add the object into mesh data
+  model.set(obj._label, obj.toJSON());
+}
+
+function checkInit() {
+  console.log('checking if initialization required');
+
+  if (model.get('startrect')) {
+    return;
   }
 
-  function updateState(evt) {
-    // TODO: debounce
-    if (evt.target && evt.target._label) {
-      m.data.set(evt.target._label, evt.target.toJSON());
-    }
+  addObject(new fabric.Text('hello', {
+    left: 210,
+    top: 100
+  }), 'testlabel');
+
+  addObject(new fabric.Rect({
+    left: 100,
+    top: 100,
+    fill: 'blue',
+    height: 100,
+    width: 100
+  }), 'startrect');
+}
+
+function updateState(evt) {
+  // TODO: debounce
+  if (evt.target && evt.target._label) {
+    model.set(evt.target._label, evt.target.toJSON());
+  }
+}
+
+function remoteUpdate(data, clock, srcId) {
+  var key;
+  var target;
+
+  console.log('captured remote update', arguments);
+
+  if (srcId === model.id) {
+    return;
   }
 
-  function remoteUpdate(data, clock, srcId) {
-    var key;
-    var target;
+  key = data[0];
+  target = canvas._objects.filter(function(obj) {
+    return obj._label === key;
+  })[0];
 
-    if (srcId === m.id) {
-      return;
-    }
-
-    key = data[0];
-    target = canvas._objects.filter(function(obj) {
-      return obj._label === key;
-    })[0];
-
-    // if we don't have the target, then add the target
-    if (! target) {
-      // use fabric deserialization
-      fabric.util.enlivenObjects([data[1]], function(objects) {
-        objects[0]._label = key;
-        canvas.add(objects[0]);
-      });
-    }
-    else {
-      target.set(data[1]);
-      canvas.renderAll();
-    }
-  }
-
-  canvas.on('object:modified', updateState);
-
-  // if dynamic updates are enabled then communicate changes
-  // as they are happening in the UI
-  if (dynamicUpdates) {
-    canvas.on({
-      'object:moving': updateState,
-      'object:scaling': updateState,
-      'object:rotating': updateState
+  // if we don't have the target, then add the target
+  if (! target) {
+    // use fabric deserialization
+    fabric.util.enlivenObjects([data[1]], function(objects) {
+      objects[0]._label = key;
+      canvas.add(objects[0]);
     });
   }
+  else {
+    target.set(data[1]);
+    canvas.renderAll();
+  }
+}
 
-  m.data.on('update', remoteUpdate);
+model.on('update', remoteUpdate);
+model.on('sync', checkInit);
 
-  m.on('sync', function() {
-    console.log('synced');
+qc.on('roominfo', function(data) {
+  console.log('room info: ', data);
+  // if when we join we are the only member, initilaise the canvas
+  if (data && data.memberCount === 1) {
+    checkInit();
+  }
+});
 
-    if (m.data.get('startrect')) {
-      return;
-    }
+document.body.appendChild(crel('canvas', {
+  id: 'c',
+  width: window.innerWidth,
+  height: window.innerHeight
+}));
 
-    addObject(new fabric.Text('hello', {
-      left: 210,
-      top: 100
-    }), 'testlabel');
+canvas = new fabric.Canvas('c');
+canvas.on('object:modified', updateState);
 
-    addObject(new fabric.Rect({
-      left: 100,
-      top: 100,
-      fill: 'blue',
-      height: 100,
-      width: 100
-    }), 'startrect');
+// if dynamic updates are enabled then communicate changes
+// as they are happening in the UI
+if (dynamicUpdates) {
+  canvas.on({
+    'object:moving': updateState,
+    'object:scaling': updateState,
+    'object:rotating': updateState
   });
 }
-
-function initCanvas() {
-  document.body.appendChild(crel('canvas', {
-    id: 'c',
-    width: window.innerWidth,
-    height: window.innerHeight
-  }));
-
-  canvas = new fabric.Canvas('c');
-  mesh.join('rtc-mesh-drawtest', opts, joined);
-}
-
-loader(cdndeps, initCanvas);
