@@ -25,21 +25,16 @@ var mesh = require('rtc-mesh');
 var quickconnect = require('rtc-quickconnect');
 var crel = require('crel');
 var uuid = require('uuid');
-var opts = {
-  config: {
-    iceServers: [
-    ]
-  }
-};
 
 // set this to true to update as moving, scaling, rotating events occur
 var canvas;
 var dynamicUpdates = false;
 
 // initialise the connection
-var qc = quickconnect('http://localhost:3000', {
+var qc = quickconnect('http://rtc.io/switchboard', {
+  // debug: true,
   room: 'rtcio-demo-mesh',
-  debug: true
+  iceServers: require('freeice')()
 });
 
 // create the shared model
