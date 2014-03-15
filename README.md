@@ -14,3 +14,10 @@ git clone https://github.com/rtc-io/rtcio-demo-mesh.git
 cd rtcio-demo-mesh
 beefy index.js:bundle.js
 ```
+
+You should now be able to open a browser window to 
+http://localhost:9966/ (or alternatively
+http://rtc-io.github.io/rtcio-demo-mesh/ if you don't want to run
+the demo locally).  Either way you'll join the `rtcio-demo-mesh` room on the
+switchboard and should be able to move around a couple of objects that are
+attempting to share state across the established peer connections.
