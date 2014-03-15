@@ -1,26 +1,6 @@
 /* jshint node: true */
 'use strict'
 
-/**
-  # rtc-mesh demo
-
-  This is a demonstration application that illustrates how
-  [rtc-mesh](https://github.com/rtc-io/rtc-mesh) can be used to assist
-  with managing shared client state using WebRTC data channels.
-
-  ## Running the Demo
-
-  If you wish to run this demo locally, then you can run the following:
-
-  ```
-  npm install beefy browserify -g
-
-  git clone
-  cd rtcio-demo-mesh
-  beefy index.js:bundle.js
-  ```
-**/
-
 var mesh = require('rtc-mesh');
 var quickconnect = require('rtc-quickconnect');
 var crel = require('crel');
