@@ -44,6 +44,14 @@ function checkInit() {
   }), 'testlabel');
 
   addObject(new fabric.Rect({
+    left: 200,
+    top: 200,
+    fill: 'red',
+    height: 100,
+    width: 50
+  }), 'anotherrect');
+
+  addObject(new fabric.Rect({
     left: 100,
     top: 100,
     fill: 'blue',
