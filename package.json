@@ -5,6 +5,7 @@
   "main": "index.js",
   "private": true,
   "scripts": {
+    "build": "browserify index.js > bundle.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
@@ -26,13 +27,13 @@
   "homepage": "https://github.com/rtc-io/rtcio-demo-mesh",
   "dependencies": {
     "rtc-mesh": "~0.6",
-    "browserify-middleware": "~2.5",
-    "express": "~3.4",
-    "rtc-switchboard": "~0.10",
     "crel": "^1",
     "cog": "~0.5",
     "uuid": "^1",
     "freeice": "~0.2",
     "rtc-quickconnect": "^1"
+  },
+  "devDependencies": {
+    "browserify": "^3"
   }
 }
