@@ -1,11 +1,137 @@
 (function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);throw new Error("Cannot find module '"+o+"'")}var f=n[o]={exports:{}};t[o][0].call(f.exports,function(e){var n=t[o][1][e];return s(n?n:e)},f,f.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(require,module,exports){
-/**
+/* jshint node: true */
+'use strict'
+
+var mesh = require('rtc-mesh');
+var quickconnect = require('rtc-quickconnect');
+var crel = require('crel');
+var uuid = require('uuid');
+
+// set this to true to update as moving, scaling, rotating events occur
+var canvas;
+var dynamicUpdates = false;
+
+// initialise the connection
+var qc = quickconnect('http://rtc.io/switchboard', {
+  // debug: true,
+  room: 'rtcio-demo-mesh',
+  iceServers: require('freeice')()
+});
+
+// create the shared model
+var model = mesh(qc);
+
+function addObject(obj, label) {
+  // add the object to the canvas
+  canvas.add(obj);
+
+  // tag the object
+  obj._label = label || uuid.v4();
+
+  // add the object into mesh data
+  model.set(obj._label, obj.toJSON());
+}
+
+function checkInit() {
+  console.log('checking if initialization required');
+
+  if (model.get('startrect')) {
+    return;
+  }
+
+  addObject(new fabric.Text('hello', {
+    left: 210,
+    top: 100
+  }), 'testlabel');
+
+  addObject(new fabric.Rect({
+    left: 200,
+    top: 200,
+    fill: 'red',
+    height: 100,
+    width: 50
+  }), 'anotherrect');
+
+  addObject(new fabric.Rect({
+    left: 100,
+    top: 100,
+    fill: 'blue',
+    height: 100,
+    width: 100
+  }), 'startrect');
+}
+
+function updateState(evt) {
+  // TODO: debounce
+  if (evt.target && evt.target._label) {
+    model.set(evt.target._label, evt.target.toJSON());
+  }
+}
+
+function remoteUpdate(data, clock, srcId) {
+  var key;
+  var target;
+
+  console.log('captured remote update', arguments);
+
+  if (srcId === model.id) {
+    return;
+  }
+
+  key = data[0];
+  target = canvas._objects.filter(function(obj) {
+    return obj._label === key;
+  })[0];
+
+  // if we don't have the target, then add the target
+  if (! target) {
+    // use fabric deserialization
+    fabric.util.enlivenObjects([data[1]], function(objects) {
+      objects[0]._label = key;
+      canvas.add(objects[0]);
+    });
+  }
+  else {
+    target.set(data[1]);
+    canvas.renderAll();
+  }
+}
+
+model.on('update', remoteUpdate);
+model.on('sync', checkInit);
+
+qc.on('roominfo', function(data) {
+  console.log('room info: ', data);
+  // if when we join we are the only member, initilaise the canvas
+  if (data && data.memberCount === 1) {
+    checkInit();
+  }
+});
+
+document.body.appendChild(crel('canvas', {
+  id: 'c',
+  width: window.innerWidth,
+  height: window.innerHeight
+}));
+
+canvas = new fabric.Canvas('c');
+canvas.on('object:modified', updateState);
+
+// if dynamic updates are enabled then communicate changes
+// as they are happening in the UI
+if (dynamicUpdates) {
+  canvas.on({
+    'object:moving': updateState,
+    'object:scaling': updateState,
+    'object:rotating': updateState
+  });
+}
+},{"crel":28,"freeice":29,"rtc-mesh":31,"rtc-quickconnect":40,"uuid":76}],2:[function(require,module,exports){
+/*!
  * The buffer module from node.js, for the browser.
  *
- * Author:   Feross Aboukhadijeh <feross@feross.org> <http://feross.org>
- * License:  MIT
- *
- * `npm install buffer`
+ * @author   Feross Aboukhadijeh <feross@feross.org> <http://feross.org>
+ * @license  MIT
  */
 
 var base64 = require('base64-js')
@@ -22,17 +148,14 @@ Buffer.poolSize = 8192
  *   === false   Use Object implementation (compatible down to IE6)
  */
 Buffer._useTypedArrays = (function () {
-   // Detect if browser supports Typed Arrays. Supported browsers are IE 10+,
-   // Firefox 4+, Chrome 7+, Safari 5.1+, Opera 11.6+, iOS 4.2+.
-  if (typeof Uint8Array !== 'function' || typeof ArrayBuffer !== 'function')
-    return false
-
-  // Does the browser support adding properties to `Uint8Array` instances? If
-  // not, then that's the same as no `Uint8Array` support. We need to be able to
-  // add all the node Buffer API methods.
-  // Bug in Firefox 4-29, now fixed: https://bugzilla.mozilla.org/show_bug.cgi?id=695438
+  // Detect if browser supports Typed Arrays. Supported browsers are IE 10+, Firefox 4+,
+  // Chrome 7+, Safari 5.1+, Opera 11.6+, iOS 4.2+. If the browser does not support adding
+  // properties to `Uint8Array` instances, then that's the same as no `Uint8Array` support
+  // because we need to be able to add all the node Buffer API methods. This is an issue
+  // in Firefox 4-29. Now fixed: https://bugzilla.mozilla.org/show_bug.cgi?id=695438
   try {
-    var arr = new Uint8Array(0)
+    var buf = new ArrayBuffer(0)
+    var arr = new Uint8Array(buf)
     arr.foo = function () { return 42 }
     return 42 === arr.foo() &&
         typeof arr.subarray === 'function' // Chrome 9-10 lack `subarray`
@@ -75,14 +198,14 @@ function Buffer (subject, encoding, noZero) {
   else if (type === 'string')
     length = Buffer.byteLength(subject, encoding)
   else if (type === 'object')
-    length = coerce(subject.length) // Assume object is an array
+    length = coerce(subject.length) // assume that object is array-like
   else
     throw new Error('First argument needs to be a number, array or string.')
 
   var buf
   if (Buffer._useTypedArrays) {
     // Preferred: Return an augmented `Uint8Array` instance for best performance
-    buf = augment(new Uint8Array(length))
+    buf = Buffer._augment(new Uint8Array(length))
   } else {
     // Fallback: Return THIS instance of Buffer (created by `new`)
     buf = this
@@ -91,9 +214,8 @@ function Buffer (subject, encoding, noZero) {
   }
 
   var i
-  if (Buffer._useTypedArrays && typeof Uint8Array === 'function' &&
-      subject instanceof Uint8Array) {
-    // Speed optimization -- use set if we're copying from a Uint8Array
+  if (Buffer._useTypedArrays && typeof subject.byteLength === 'number') {
+    // Speed optimization -- use set if we're copying from a typed array
     buf._set(subject)
   } else if (isArrayish(subject)) {
     // Treat array-ish objects as a byte array
@@ -390,9 +512,14 @@ Buffer.prototype.copy = function (target, target_start, start, end) {
   if (target.length - target_start < end - start)
     end = target.length - target_start + start
 
-  // copy!
-  for (var i = 0; i < end - start; i++)
-    target[i + target_start] = this[i + start]
+  var len = end - start
+
+  if (len < 100 || !Buffer._useTypedArrays) {
+    for (var i = 0; i < len; i++)
+      target[i + target_start] = this[i + start]
+  } else {
+    target._set(this.subarray(start, start + len), target_start)
+  }
 }
 
 function _base64Slice (buf, start, end) {
@@ -461,7 +588,7 @@ Buffer.prototype.slice = function (start, end) {
   end = clamp(end, len, len)
 
   if (Buffer._useTypedArrays) {
-    return augment(this.subarray(start, end))
+    return Buffer._augment(this.subarray(start, end))
   } else {
     var sliceLen = end - start
     var newBuf = new Buffer(sliceLen, undefined, true)
@@ -904,7 +1031,7 @@ Buffer.prototype.inspect = function () {
  * Added in Node 0.12. Only available in browsers that support ArrayBuffer.
  */
 Buffer.prototype.toArrayBuffer = function () {
-  if (typeof Uint8Array === 'function') {
+  if (typeof Uint8Array !== 'undefined') {
     if (Buffer._useTypedArrays) {
       return (new Buffer(this)).buffer
     } else {
@@ -929,9 +1056,9 @@ function stringtrim (str) {
 var BP = Buffer.prototype
 
 /**
- * Augment the Uint8Array *instance* (not the class!) with Buffer methods
+ * Augment a Uint8Array *instance* (not the Uint8Array class!) with Buffer methods
  */
-function augment (arr) {
+Buffer._augment = function (arr) {
   arr._isBuffer = true
 
   // save reference to original Uint8Array get/set methods before overwriting
@@ -1110,7 +1237,7 @@ function assert (test, message) {
   if (!test) throw new Error(message || 'Failed assertion')
 }
 
-},{"base64-js":2,"ieee754":3}],2:[function(require,module,exports){
+},{"base64-js":3,"ieee754":4}],3:[function(require,module,exports){
 var lookup = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 
 ;(function (exports) {
@@ -1233,7 +1360,7 @@ var lookup = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 	module.exports.fromByteArray = uint8ToBase64
 }())
 
-},{}],3:[function(require,module,exports){
+},{}],4:[function(require,module,exports){
 exports.read = function(buffer, offset, isLE, mLen, nBytes) {
   var e, m,
       eLen = nBytes * 8 - mLen - 1,
@@ -1319,7 +1446,7 @@ exports.write = function(buffer, value, offset, isLE, mLen, nBytes) {
   buffer[offset + i - d] |= s * 128;
 };
 
-},{}],4:[function(require,module,exports){
+},{}],5:[function(require,module,exports){
 // Copyright Joyent, Inc. and other Node contributors.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a
@@ -1621,7 +1748,7 @@ function isUndefined(arg) {
   return arg === void 0;
 }
 
-},{}],5:[function(require,module,exports){
+},{}],6:[function(require,module,exports){
 if (typeof Object.create === 'function') {
   // implementation from standard node.js 'util' module
   module.exports = function inherits(ctor, superCtor) {
@@ -1646,7 +1773,7 @@ if (typeof Object.create === 'function') {
   }
 }
 
-},{}],6:[function(require,module,exports){
+},{}],7:[function(require,module,exports){
 // shim for using process in browser
 
 var process = module.exports = {};
@@ -1691,6 +1818,13 @@ process.browser = true;
 process.env = {};
 process.argv = [];
 
+function noop() {}
+
+process.on = noop;
+process.once = noop;
+process.off = noop;
+process.emit = noop;
+
 process.binding = function (name) {
     throw new Error('process.binding is not supported');
 }
@@ -1701,7 +1835,7 @@ process.chdir = function (dir) {
     throw new Error('process.chdir is not supported');
 };
 
-},{}],7:[function(require,module,exports){
+},{}],8:[function(require,module,exports){
 (function (global){
 /*! http://mths.be/punycode v1.2.4 by @mathias */
 ;(function(root) {
@@ -2212,7 +2346,7 @@ process.chdir = function (dir) {
 }(this));
 
 }).call(this,typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{}],8:[function(require,module,exports){
+},{}],9:[function(require,module,exports){
 // Copyright Joyent, Inc. and other Node contributors.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a
@@ -2298,7 +2432,7 @@ var isArray = Array.isArray || function (xs) {
   return Object.prototype.toString.call(xs) === '[object Array]';
 };
 
-},{}],9:[function(require,module,exports){
+},{}],10:[function(require,module,exports){
 // Copyright Joyent, Inc. and other Node contributors.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a
@@ -2385,13 +2519,13 @@ var objectKeys = Object.keys || function (obj) {
   return res;
 };
 
-},{}],10:[function(require,module,exports){
+},{}],11:[function(require,module,exports){
 'use strict';
 
 exports.decode = exports.parse = require('./decode');
 exports.encode = exports.stringify = require('./encode');
 
-},{"./decode":8,"./encode":9}],11:[function(require,module,exports){
+},{"./decode":9,"./encode":10}],12:[function(require,module,exports){
 // Copyright Joyent, Inc. and other Node contributors.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a
@@ -2465,7 +2599,7 @@ function onend() {
   });
 }
 
-},{"./readable.js":15,"./writable.js":17,"inherits":5,"process/browser.js":13}],12:[function(require,module,exports){
+},{"./readable.js":16,"./writable.js":18,"inherits":6,"process/browser.js":14}],13:[function(require,module,exports){
 // Copyright Joyent, Inc. and other Node contributors.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a
@@ -2594,9 +2728,62 @@ Stream.prototype.pipe = function(dest, options) {
   return dest;
 };
 
-},{"./duplex.js":11,"./passthrough.js":14,"./readable.js":15,"./transform.js":16,"./writable.js":17,"events":4,"inherits":5}],13:[function(require,module,exports){
-module.exports=require(6)
-},{}],14:[function(require,module,exports){
+},{"./duplex.js":12,"./passthrough.js":15,"./readable.js":16,"./transform.js":17,"./writable.js":18,"events":5,"inherits":6}],14:[function(require,module,exports){
+// shim for using process in browser
+
+var process = module.exports = {};
+
+process.nextTick = (function () {
+    var canSetImmediate = typeof window !== 'undefined'
+    && window.setImmediate;
+    var canPost = typeof window !== 'undefined'
+    && window.postMessage && window.addEventListener
+    ;
+
+    if (canSetImmediate) {
+        return function (f) { return window.setImmediate(f) };
+    }
+
+    if (canPost) {
+        var queue = [];
+        window.addEventListener('message', function (ev) {
+            var source = ev.source;
+            if ((source === window || source === null) && ev.data === 'process-tick') {
+                ev.stopPropagation();
+                if (queue.length > 0) {
+                    var fn = queue.shift();
+                    fn();
+                }
+            }
+        }, true);
+
+        return function nextTick(fn) {
+            queue.push(fn);
+            window.postMessage('process-tick', '*');
+        };
+    }
+
+    return function nextTick(fn) {
+        setTimeout(fn, 0);
+    };
+})();
+
+process.title = 'browser';
+process.browser = true;
+process.env = {};
+process.argv = [];
+
+process.binding = function (name) {
+    throw new Error('process.binding is not supported');
+}
+
+// TODO(shtylman)
+process.cwd = function () { return '/' };
+process.chdir = function (dir) {
+    throw new Error('process.chdir is not supported');
+};
+
+},{}],15:[function(require,module,exports){
 // Copyright Joyent, Inc. and other Node contributors.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a
@@ -2639,7 +2826,7 @@ PassThrough.prototype._transform = function(chunk, encoding, cb) {
   cb(null, chunk);
 };
 
-},{"./transform.js":16,"inherits":5}],15:[function(require,module,exports){
+},{"./transform.js":17,"inherits":6}],16:[function(require,module,exports){
 (function (process){
 // Copyright Joyent, Inc. and other Node contributors.
 //
@@ -3575,8 +3762,8 @@ function indexOf (xs, x) {
   return -1;
 }
 
-}).call(this,require("/home/doehlman/.bashinate/install/node/0.10.26/lib/node_modules/browserify/node_modules/insert-module-globals/node_modules/process/browser.js"))
-},{"./index.js":12,"/home/doehlman/.bashinate/install/node/0.10.26/lib/node_modules/browserify/node_modules/insert-module-globals/node_modules/process/browser.js":6,"buffer":1,"events":4,"inherits":5,"process/browser.js":13,"string_decoder":18}],16:[function(require,module,exports){
+}).call(this,require("/home/doehlman/code/rtc.io/demo-mesh/node_modules/browserify/node_modules/insert-module-globals/node_modules/process/browser.js"))
+},{"./index.js":13,"/home/doehlman/code/rtc.io/demo-mesh/node_modules/browserify/node_modules/insert-module-globals/node_modules/process/browser.js":7,"buffer":2,"events":5,"inherits":6,"process/browser.js":14,"string_decoder":19}],17:[function(require,module,exports){
 // Copyright Joyent, Inc. and other Node contributors.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a
@@ -3782,7 +3969,7 @@ function done(stream, er) {
   return stream.push(null);
 }
 
-},{"./duplex.js":11,"inherits":5}],17:[function(require,module,exports){
+},{"./duplex.js":12,"inherits":6}],18:[function(require,module,exports){
 // Copyright Joyent, Inc. and other Node contributors.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a
@@ -4170,7 +4357,7 @@ function endWritable(stream, state, cb) {
   state.ended = true;
 }
 
-},{"./index.js":12,"buffer":1,"inherits":5,"process/browser.js":13}],18:[function(require,module,exports){
+},{"./index.js":13,"buffer":2,"inherits":6,"process/browser.js":14}],19:[function(require,module,exports){
 // Copyright Joyent, Inc. and other Node contributors.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a
@@ -4363,11 +4550,7 @@ function base64DetectIncompleteChar(buffer) {
   return incomplete;
 }
 
-},{"buffer":1}],19:[function(require,module,exports){
-/*jshint strict:true node:true es5:true onevar:true laxcomma:true laxbreak:true eqeqeq:true immed:true latedef:true*/
-(function () {
-  "use strict";
-
+},{"buffer":2}],20:[function(require,module,exports){
 // Copyright Joyent, Inc. and other Node contributors.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a
@@ -4396,6 +4579,23 @@ exports.resolve = urlResolve;
 exports.resolveObject = urlResolveObject;
 exports.format = urlFormat;
 
+exports.Url = Url;
+
+function Url() {
+  this.protocol = null;
+  this.slashes = null;
+  this.auth = null;
+  this.host = null;
+  this.port = null;
+  this.hostname = null;
+  this.hash = null;
+  this.search = null;
+  this.query = null;
+  this.pathname = null;
+  this.path = null;
+  this.href = null;
+}
+
 // Reference: RFC 3986, RFC 1808, RFC 2396
 
 // define these here so at least they only have to be
@@ -4408,20 +4608,19 @@ var protocolPattern = /^([a-z0-9.+-]+:)/i,
     delims = ['<', '>', '"', '`', ' ', '\r', '\n', '\t'],
 
     // RFC 2396: characters not allowed for various reasons.
-    unwise = ['{', '}', '|', '\\', '^', '~', '`'].concat(delims),
+    unwise = ['{', '}', '|', '\\', '^', '`'].concat(delims),
 
     // Allowed by RFCs, but cause of XSS attacks.  Always escape these.
-    autoEscape = ['\''].concat(delims),
+    autoEscape = ['\''].concat(unwise),
     // Characters that are never ever allowed in a hostname.
     // Note that any invalid chars are also handled, but these
     // are the ones that are *expected* to be seen, so we fast-path
     // them.
-    nonHostChars = ['%', '/', '?', ';', '#']
-      .concat(unwise).concat(autoEscape),
-    nonAuthChars = ['/', '@', '?', '#'].concat(delims),
+    nonHostChars = ['%', '/', '?', ';', '#'].concat(autoEscape),
+    hostEndingChars = ['/', '?', '#'],
     hostnameMaxLen = 255,
-    hostnamePartPattern = /^[a-zA-Z0-9][a-z0-9A-Z_-]{0,62}$/,
-    hostnamePartStart = /^([a-zA-Z0-9][a-z0-9A-Z_-]{0,62})(.*)$/,
+    hostnamePartPattern = /^[a-z0-9A-Z_-]{0,63}$/,
+    hostnamePartStart = /^([a-z0-9A-Z_-]{0,63})(.*)$/,
     // protocols that can allow "unsafe" and "unwise" chars.
     unsafeProtocol = {
       'javascript': true,
@@ -4431,18 +4630,6 @@ var protocolPattern = /^([a-z0-9.+-]+:)/i,
     hostlessProtocol = {
       'javascript': true,
       'javascript:': true
-    },
-    // protocols that always have a path component.
-    pathedProtocol = {
-      'http': true,
-      'https': true,
-      'ftp': true,
-      'gopher': true,
-      'file': true,
-      'http:': true,
-      'ftp:': true,
-      'gopher:': true,
-      'file:': true
     },
     // protocols that always contain a // bit.
     slashedProtocol = {
@@ -4460,14 +4647,19 @@ var protocolPattern = /^([a-z0-9.+-]+:)/i,
     querystring = require('querystring');
 
 function urlParse(url, parseQueryString, slashesDenoteHost) {
-  if (url && typeof(url) === 'object' && url.href) return url;
+  if (url && isObject(url) && url instanceof Url) return url;
 
-  if (typeof url !== 'string') {
+  var u = new Url;
+  u.parse(url, parseQueryString, slashesDenoteHost);
+  return u;
+}
+
+Url.prototype.parse = function(url, parseQueryString, slashesDenoteHost) {
+  if (!isString(url)) {
     throw new TypeError("Parameter 'url' must be a string, not " + typeof url);
   }
 
-  var out = {},
-      rest = url;
+  var rest = url;
 
   // trim before proceeding.
   // This is to support parse stuff like "  http://foo.com  \n"
@@ -4477,7 +4669,7 @@ function urlParse(url, parseQueryString, slashesDenoteHost) {
   if (proto) {
     proto = proto[0];
     var lowerProto = proto.toLowerCase();
-    out.protocol = lowerProto;
+    this.protocol = lowerProto;
     rest = rest.substr(proto.length);
   }
 
@@ -4489,78 +4681,85 @@ function urlParse(url, parseQueryString, slashesDenoteHost) {
     var slashes = rest.substr(0, 2) === '//';
     if (slashes && !(proto && hostlessProtocol[proto])) {
       rest = rest.substr(2);
-      out.slashes = true;
+      this.slashes = true;
     }
   }
 
   if (!hostlessProtocol[proto] &&
       (slashes || (proto && !slashedProtocol[proto]))) {
+
     // there's a hostname.
     // the first instance of /, ?, ;, or # ends the host.
-    // don't enforce full RFC correctness, just be unstupid about it.
-
+    //
     // If there is an @ in the hostname, then non-host chars *are* allowed
-    // to the left of the first @ sign, unless some non-auth character
+    // to the left of the last @ sign, unless some host-ending character
     // comes *before* the @-sign.
     // URLs are obnoxious.
-    var atSign = rest.indexOf('@');
-    if (atSign !== -1) {
-      var auth = rest.slice(0, atSign);
+    //
+    // ex:
+    // http://a@b@c/ => user:a@b host:c
+    // http://a@b?@c => user:a host:c path:/?@c
 
-      // there *may be* an auth
-      var hasAuth = true;
-      for (var i = 0, l = nonAuthChars.length; i < l; i++) {
-        if (auth.indexOf(nonAuthChars[i]) !== -1) {
-          // not a valid auth.  Something like http://foo.com/bar@baz/
-          hasAuth = false;
-          break;
-        }
-      }
+    // v0.12 TODO(isaacs): This is not quite how Chrome does things.
+    // Review our test case against browsers more comprehensively.
 
-      if (hasAuth) {
-        // pluck off the auth portion.
-        out.auth = decodeURIComponent(auth);
-        rest = rest.substr(atSign + 1);
-      }
+    // find the first instance of any hostEndingChars
+    var hostEnd = -1;
+    for (var i = 0; i < hostEndingChars.length; i++) {
+      var hec = rest.indexOf(hostEndingChars[i]);
+      if (hec !== -1 && (hostEnd === -1 || hec < hostEnd))
+        hostEnd = hec;
     }
 
-    var firstNonHost = -1;
-    for (var i = 0, l = nonHostChars.length; i < l; i++) {
-      var index = rest.indexOf(nonHostChars[i]);
-      if (index !== -1 &&
-          (firstNonHost < 0 || index < firstNonHost)) firstNonHost = index;
-    }
-
-    if (firstNonHost !== -1) {
-      out.host = rest.substr(0, firstNonHost);
-      rest = rest.substr(firstNonHost);
+    // at this point, either we have an explicit point where the
+    // auth portion cannot go past, or the last @ char is the decider.
+    var auth, atSign;
+    if (hostEnd === -1) {
+      // atSign can be anywhere.
+      atSign = rest.lastIndexOf('@');
     } else {
-      out.host = rest;
-      rest = '';
+      // atSign must be in auth portion.
+      // http://a@b/c@d => host:b auth:a path:/c@d
+      atSign = rest.lastIndexOf('@', hostEnd);
     }
+
+    // Now we have a portion which is definitely the auth.
+    // Pull that off.
+    if (atSign !== -1) {
+      auth = rest.slice(0, atSign);
+      rest = rest.slice(atSign + 1);
+      this.auth = decodeURIComponent(auth);
+    }
+
+    // the host is the remaining to the left of the first non-host char
+    hostEnd = -1;
+    for (var i = 0; i < nonHostChars.length; i++) {
+      var hec = rest.indexOf(nonHostChars[i]);
+      if (hec !== -1 && (hostEnd === -1 || hec < hostEnd))
+        hostEnd = hec;
+    }
+    // if we still have not hit it, then the entire thing is a host.
+    if (hostEnd === -1)
+      hostEnd = rest.length;
+
+    this.host = rest.slice(0, hostEnd);
+    rest = rest.slice(hostEnd);
 
     // pull out port.
-    var p = parseHost(out.host);
-    var keys = Object.keys(p);
-    for (var i = 0, l = keys.length; i < l; i++) {
-      var key = keys[i];
-      out[key] = p[key];
-    }
+    this.parseHost();
 
     // we've indicated that there is a hostname,
     // so even if it's empty, it has to be present.
-    out.hostname = out.hostname || '';
+    this.hostname = this.hostname || '';
 
     // if hostname begins with [ and ends with ]
     // assume that it's an IPv6 address.
-    var ipv6Hostname = out.hostname[0] === '[' &&
-        out.hostname[out.hostname.length - 1] === ']';
+    var ipv6Hostname = this.hostname[0] === '[' &&
+        this.hostname[this.hostname.length - 1] === ']';
 
     // validate a little.
-    if (out.hostname.length > hostnameMaxLen) {
-      out.hostname = '';
-    } else if (!ipv6Hostname) {
-      var hostparts = out.hostname.split(/\./);
+    if (!ipv6Hostname) {
+      var hostparts = this.hostname.split(/\./);
       for (var i = 0, l = hostparts.length; i < l; i++) {
         var part = hostparts[i];
         if (!part) continue;
@@ -4588,38 +4787,44 @@ function urlParse(url, parseQueryString, slashesDenoteHost) {
             if (notHost.length) {
               rest = '/' + notHost.join('.') + rest;
             }
-            out.hostname = validParts.join('.');
+            this.hostname = validParts.join('.');
             break;
           }
         }
       }
     }
 
-    // hostnames are always lower case.
-    out.hostname = out.hostname.toLowerCase();
+    if (this.hostname.length > hostnameMaxLen) {
+      this.hostname = '';
+    } else {
+      // hostnames are always lower case.
+      this.hostname = this.hostname.toLowerCase();
+    }
 
     if (!ipv6Hostname) {
       // IDNA Support: Returns a puny coded representation of "domain".
       // It only converts the part of the domain name that
       // has non ASCII characters. I.e. it dosent matter if
       // you call it with a domain that already is in ASCII.
-      var domainArray = out.hostname.split('.');
+      var domainArray = this.hostname.split('.');
       var newOut = [];
       for (var i = 0; i < domainArray.length; ++i) {
         var s = domainArray[i];
         newOut.push(s.match(/[^A-Za-z0-9_-]/) ?
             'xn--' + punycode.encode(s) : s);
       }
-      out.hostname = newOut.join('.');
+      this.hostname = newOut.join('.');
     }
 
-    out.host = (out.hostname || '') +
-        ((out.port) ? ':' + out.port : '');
-    out.href += out.host;
+    var p = this.port ? ':' + this.port : '';
+    var h = this.hostname || '';
+    this.host = h + p;
+    this.href += this.host;
 
     // strip [ and ] from the hostname
+    // the host field still retains them, though
     if (ipv6Hostname) {
-      out.hostname = out.hostname.substr(1, out.hostname.length - 2);
+      this.hostname = this.hostname.substr(1, this.hostname.length - 2);
       if (rest[0] !== '/') {
         rest = '/' + rest;
       }
@@ -4648,38 +4853,39 @@ function urlParse(url, parseQueryString, slashesDenoteHost) {
   var hash = rest.indexOf('#');
   if (hash !== -1) {
     // got a fragment string.
-    out.hash = rest.substr(hash);
+    this.hash = rest.substr(hash);
     rest = rest.slice(0, hash);
   }
   var qm = rest.indexOf('?');
   if (qm !== -1) {
-    out.search = rest.substr(qm);
-    out.query = rest.substr(qm + 1);
+    this.search = rest.substr(qm);
+    this.query = rest.substr(qm + 1);
     if (parseQueryString) {
-      out.query = querystring.parse(out.query);
+      this.query = querystring.parse(this.query);
     }
     rest = rest.slice(0, qm);
   } else if (parseQueryString) {
     // no query string, but parseQueryString still requested
-    out.search = '';
-    out.query = {};
+    this.search = '';
+    this.query = {};
   }
-  if (rest) out.pathname = rest;
-  if (slashedProtocol[proto] &&
-      out.hostname && !out.pathname) {
-    out.pathname = '/';
+  if (rest) this.pathname = rest;
+  if (slashedProtocol[lowerProto] &&
+      this.hostname && !this.pathname) {
+    this.pathname = '/';
   }
 
   //to support http.request
-  if (out.pathname || out.search) {
-    out.path = (out.pathname ? out.pathname : '') +
-               (out.search ? out.search : '');
+  if (this.pathname || this.search) {
+    var p = this.pathname || '';
+    var s = this.search || '';
+    this.path = p + s;
   }
 
   // finally, reconstruct the href based on what has been validated.
-  out.href = urlFormat(out);
-  return out;
-}
+  this.href = this.format();
+  return this;
+};
 
 // format a parsed object into a url string
 function urlFormat(obj) {
@@ -4687,44 +4893,49 @@ function urlFormat(obj) {
   // If it's an obj, this is a no-op.
   // this way, you can call url_format() on strings
   // to clean up potentially wonky urls.
-  if (typeof(obj) === 'string') obj = urlParse(obj);
+  if (isString(obj)) obj = urlParse(obj);
+  if (!(obj instanceof Url)) return Url.prototype.format.call(obj);
+  return obj.format();
+}
 
-  var auth = obj.auth || '';
+Url.prototype.format = function() {
+  var auth = this.auth || '';
   if (auth) {
     auth = encodeURIComponent(auth);
     auth = auth.replace(/%3A/i, ':');
     auth += '@';
   }
 
-  var protocol = obj.protocol || '',
-      pathname = obj.pathname || '',
-      hash = obj.hash || '',
+  var protocol = this.protocol || '',
+      pathname = this.pathname || '',
+      hash = this.hash || '',
       host = false,
       query = '';
 
-  if (obj.host !== undefined) {
-    host = auth + obj.host;
-  } else if (obj.hostname !== undefined) {
-    host = auth + (obj.hostname.indexOf(':') === -1 ?
-        obj.hostname :
-        '[' + obj.hostname + ']');
-    if (obj.port) {
-      host += ':' + obj.port;
+  if (this.host) {
+    host = auth + this.host;
+  } else if (this.hostname) {
+    host = auth + (this.hostname.indexOf(':') === -1 ?
+        this.hostname :
+        '[' + this.hostname + ']');
+    if (this.port) {
+      host += ':' + this.port;
     }
   }
 
-  if (obj.query && typeof obj.query === 'object' &&
-      Object.keys(obj.query).length) {
-    query = querystring.stringify(obj.query);
+  if (this.query &&
+      isObject(this.query) &&
+      Object.keys(this.query).length) {
+    query = querystring.stringify(this.query);
   }
 
-  var search = obj.search || (query && ('?' + query)) || '';
+  var search = this.search || (query && ('?' + query)) || '';
 
   if (protocol && protocol.substr(-1) !== ':') protocol += ':';
 
   // only the slashedProtocols get the //.  Not mailto:, xmpp:, etc.
   // unless they had them to begin with.
-  if (obj.slashes ||
+  if (this.slashes ||
       (!protocol || slashedProtocol[protocol]) && host !== false) {
     host = '//' + (host || '');
     if (pathname && pathname.charAt(0) !== '/') pathname = '/' + pathname;
@@ -4735,40 +4946,68 @@ function urlFormat(obj) {
   if (hash && hash.charAt(0) !== '#') hash = '#' + hash;
   if (search && search.charAt(0) !== '?') search = '?' + search;
 
+  pathname = pathname.replace(/[?#]/g, function(match) {
+    return encodeURIComponent(match);
+  });
+  search = search.replace('#', '%23');
+
   return protocol + host + pathname + search + hash;
-}
+};
 
 function urlResolve(source, relative) {
-  return urlFormat(urlResolveObject(source, relative));
+  return urlParse(source, false, true).resolve(relative);
 }
+
+Url.prototype.resolve = function(relative) {
+  return this.resolveObject(urlParse(relative, false, true)).format();
+};
 
 function urlResolveObject(source, relative) {
   if (!source) return relative;
+  return urlParse(source, false, true).resolveObject(relative);
+}
 
-  source = urlParse(urlFormat(source), false, true);
-  relative = urlParse(urlFormat(relative), false, true);
+Url.prototype.resolveObject = function(relative) {
+  if (isString(relative)) {
+    var rel = new Url();
+    rel.parse(relative, false, true);
+    relative = rel;
+  }
+
+  var result = new Url();
+  Object.keys(this).forEach(function(k) {
+    result[k] = this[k];
+  }, this);
 
   // hash is always overridden, no matter what.
-  source.hash = relative.hash;
+  // even href="" will remove it.
+  result.hash = relative.hash;
 
+  // if the relative url is empty, then there's nothing left to do here.
   if (relative.href === '') {
-    source.href = urlFormat(source);
-    return source;
+    result.href = result.format();
+    return result;
   }
 
   // hrefs like //foo/bar always cut to the protocol.
   if (relative.slashes && !relative.protocol) {
-    relative.protocol = source.protocol;
+    // take everything except the protocol from relative
+    Object.keys(relative).forEach(function(k) {
+      if (k !== 'protocol')
+        result[k] = relative[k];
+    });
+
     //urlParse appends trailing / to urls like http://www.example.com
-    if (slashedProtocol[relative.protocol] &&
-        relative.hostname && !relative.pathname) {
-      relative.path = relative.pathname = '/';
+    if (slashedProtocol[result.protocol] &&
+        result.hostname && !result.pathname) {
+      result.path = result.pathname = '/';
     }
-    relative.href = urlFormat(relative);
-    return relative;
+
+    result.href = result.format();
+    return result;
   }
 
-  if (relative.protocol && relative.protocol !== source.protocol) {
+  if (relative.protocol && relative.protocol !== result.protocol) {
     // if it's a known url protocol, then changing
     // the protocol does weird things
     // first, if it's not file:, then we MUST have a host,
@@ -4778,10 +5017,14 @@ function urlResolveObject(source, relative) {
     // because that's known to be hostless.
     // anything else is assumed to be absolute.
     if (!slashedProtocol[relative.protocol]) {
-      relative.href = urlFormat(relative);
-      return relative;
+      Object.keys(relative).forEach(function(k) {
+        result[k] = relative[k];
+      });
+      result.href = result.format();
+      return result;
     }
-    source.protocol = relative.protocol;
+
+    result.protocol = relative.protocol;
     if (!relative.host && !hostlessProtocol[relative.protocol]) {
       var relPath = (relative.pathname || '').split('/');
       while (relPath.length && !(relative.host = relPath.shift()));
@@ -4789,72 +5032,72 @@ function urlResolveObject(source, relative) {
       if (!relative.hostname) relative.hostname = '';
       if (relPath[0] !== '') relPath.unshift('');
       if (relPath.length < 2) relPath.unshift('');
-      relative.pathname = relPath.join('/');
+      result.pathname = relPath.join('/');
+    } else {
+      result.pathname = relative.pathname;
     }
-    source.pathname = relative.pathname;
-    source.search = relative.search;
-    source.query = relative.query;
-    source.host = relative.host || '';
-    source.auth = relative.auth;
-    source.hostname = relative.hostname || relative.host;
-    source.port = relative.port;
-    //to support http.request
-    if (source.pathname !== undefined || source.search !== undefined) {
-      source.path = (source.pathname ? source.pathname : '') +
-                    (source.search ? source.search : '');
+    result.search = relative.search;
+    result.query = relative.query;
+    result.host = relative.host || '';
+    result.auth = relative.auth;
+    result.hostname = relative.hostname || relative.host;
+    result.port = relative.port;
+    // to support http.request
+    if (result.pathname || result.search) {
+      var p = result.pathname || '';
+      var s = result.search || '';
+      result.path = p + s;
     }
-    source.slashes = source.slashes || relative.slashes;
-    source.href = urlFormat(source);
-    return source;
+    result.slashes = result.slashes || relative.slashes;
+    result.href = result.format();
+    return result;
   }
 
-  var isSourceAbs = (source.pathname && source.pathname.charAt(0) === '/'),
+  var isSourceAbs = (result.pathname && result.pathname.charAt(0) === '/'),
       isRelAbs = (
-          relative.host !== undefined ||
+          relative.host ||
           relative.pathname && relative.pathname.charAt(0) === '/'
       ),
       mustEndAbs = (isRelAbs || isSourceAbs ||
-                    (source.host && relative.pathname)),
+                    (result.host && relative.pathname)),
       removeAllDots = mustEndAbs,
-      srcPath = source.pathname && source.pathname.split('/') || [],
+      srcPath = result.pathname && result.pathname.split('/') || [],
       relPath = relative.pathname && relative.pathname.split('/') || [],
-      psychotic = source.protocol &&
-          !slashedProtocol[source.protocol];
+      psychotic = result.protocol && !slashedProtocol[result.protocol];
 
   // if the url is a non-slashed url, then relative
   // links like ../.. should be able
   // to crawl up to the hostname, as well.  This is strange.
-  // source.protocol has already been set by now.
+  // result.protocol has already been set by now.
   // Later on, put the first path part into the host field.
   if (psychotic) {
-
-    delete source.hostname;
-    delete source.port;
-    if (source.host) {
-      if (srcPath[0] === '') srcPath[0] = source.host;
-      else srcPath.unshift(source.host);
+    result.hostname = '';
+    result.port = null;
+    if (result.host) {
+      if (srcPath[0] === '') srcPath[0] = result.host;
+      else srcPath.unshift(result.host);
     }
-    delete source.host;
+    result.host = '';
     if (relative.protocol) {
-      delete relative.hostname;
-      delete relative.port;
+      relative.hostname = null;
+      relative.port = null;
       if (relative.host) {
         if (relPath[0] === '') relPath[0] = relative.host;
         else relPath.unshift(relative.host);
       }
-      delete relative.host;
+      relative.host = null;
     }
     mustEndAbs = mustEndAbs && (relPath[0] === '' || srcPath[0] === '');
   }
 
   if (isRelAbs) {
     // it's absolute.
-    source.host = (relative.host || relative.host === '') ?
-                      relative.host : source.host;
-    source.hostname = (relative.hostname || relative.hostname === '') ?
-                      relative.hostname : source.hostname;
-    source.search = relative.search;
-    source.query = relative.query;
+    result.host = (relative.host || relative.host === '') ?
+                  relative.host : result.host;
+    result.hostname = (relative.hostname || relative.hostname === '') ?
+                      relative.hostname : result.hostname;
+    result.search = relative.search;
+    result.query = relative.query;
     srcPath = relPath;
     // fall through to the dot-handling below.
   } else if (relPath.length) {
@@ -4863,53 +5106,55 @@ function urlResolveObject(source, relative) {
     if (!srcPath) srcPath = [];
     srcPath.pop();
     srcPath = srcPath.concat(relPath);
-    source.search = relative.search;
-    source.query = relative.query;
-  } else if ('search' in relative) {
+    result.search = relative.search;
+    result.query = relative.query;
+  } else if (!isNullOrUndefined(relative.search)) {
     // just pull out the search.
     // like href='?foo'.
     // Put this after the other two cases because it simplifies the booleans
     if (psychotic) {
-      source.hostname = source.host = srcPath.shift();
+      result.hostname = result.host = srcPath.shift();
       //occationaly the auth can get stuck only in host
       //this especialy happens in cases like
       //url.resolveObject('mailto:local1@domain1', 'local2@domain2')
-      var authInHost = source.host && source.host.indexOf('@') > 0 ?
-                       source.host.split('@') : false;
+      var authInHost = result.host && result.host.indexOf('@') > 0 ?
+                       result.host.split('@') : false;
       if (authInHost) {
-        source.auth = authInHost.shift();
-        source.host = source.hostname = authInHost.shift();
+        result.auth = authInHost.shift();
+        result.host = result.hostname = authInHost.shift();
       }
     }
-    source.search = relative.search;
-    source.query = relative.query;
+    result.search = relative.search;
+    result.query = relative.query;
     //to support http.request
-    if (source.pathname !== undefined || source.search !== undefined) {
-      source.path = (source.pathname ? source.pathname : '') +
-                    (source.search ? source.search : '');
+    if (!isNull(result.pathname) || !isNull(result.search)) {
+      result.path = (result.pathname ? result.pathname : '') +
+                    (result.search ? result.search : '');
     }
-    source.href = urlFormat(source);
-    return source;
+    result.href = result.format();
+    return result;
   }
+
   if (!srcPath.length) {
     // no path at all.  easy.
     // we've already handled the other stuff above.
-    delete source.pathname;
+    result.pathname = null;
     //to support http.request
-    if (!source.search) {
-      source.path = '/' + source.search;
+    if (result.search) {
+      result.path = '/' + result.search;
     } else {
-      delete source.path;
+      result.path = null;
     }
-    source.href = urlFormat(source);
-    return source;
+    result.href = result.format();
+    return result;
   }
+
   // if a url ENDs in . or .., then it must get a trailing slash.
   // however, if it ends in anything else non-slashy,
   // then it must NOT get a trailing slash.
   var last = srcPath.slice(-1)[0];
   var hasTrailingSlash = (
-      (source.host || relative.host) && (last === '.' || last === '..') ||
+      (result.host || relative.host) && (last === '.' || last === '..') ||
       last === '');
 
   // strip single dots, resolve double dots to parent dir
@@ -4949,61 +5194,79 @@ function urlResolveObject(source, relative) {
 
   // put the host back
   if (psychotic) {
-    source.hostname = source.host = isAbsolute ? '' :
+    result.hostname = result.host = isAbsolute ? '' :
                                     srcPath.length ? srcPath.shift() : '';
     //occationaly the auth can get stuck only in host
     //this especialy happens in cases like
     //url.resolveObject('mailto:local1@domain1', 'local2@domain2')
-    var authInHost = source.host && source.host.indexOf('@') > 0 ?
-                     source.host.split('@') : false;
+    var authInHost = result.host && result.host.indexOf('@') > 0 ?
+                     result.host.split('@') : false;
     if (authInHost) {
-      source.auth = authInHost.shift();
-      source.host = source.hostname = authInHost.shift();
+      result.auth = authInHost.shift();
+      result.host = result.hostname = authInHost.shift();
     }
   }
 
-  mustEndAbs = mustEndAbs || (source.host && srcPath.length);
+  mustEndAbs = mustEndAbs || (result.host && srcPath.length);
 
   if (mustEndAbs && !isAbsolute) {
     srcPath.unshift('');
   }
 
-  source.pathname = srcPath.join('/');
-  //to support request.http
-  if (source.pathname !== undefined || source.search !== undefined) {
-    source.path = (source.pathname ? source.pathname : '') +
-                  (source.search ? source.search : '');
+  if (!srcPath.length) {
+    result.pathname = null;
+    result.path = null;
+  } else {
+    result.pathname = srcPath.join('/');
   }
-  source.auth = relative.auth || source.auth;
-  source.slashes = source.slashes || relative.slashes;
-  source.href = urlFormat(source);
-  return source;
-}
 
-function parseHost(host) {
-  var out = {};
+  //to support request.http
+  if (!isNull(result.pathname) || !isNull(result.search)) {
+    result.path = (result.pathname ? result.pathname : '') +
+                  (result.search ? result.search : '');
+  }
+  result.auth = relative.auth || result.auth;
+  result.slashes = result.slashes || relative.slashes;
+  result.href = result.format();
+  return result;
+};
+
+Url.prototype.parseHost = function() {
+  var host = this.host;
   var port = portPattern.exec(host);
   if (port) {
     port = port[0];
     if (port !== ':') {
-      out.port = port.substr(1);
+      this.port = port.substr(1);
     }
     host = host.substr(0, host.length - port.length);
   }
-  if (host) out.hostname = host;
-  return out;
+  if (host) this.hostname = host;
+};
+
+function isString(arg) {
+  return typeof arg === "string";
 }
 
-}());
+function isObject(arg) {
+  return typeof arg === 'object' && arg !== null;
+}
 
-},{"punycode":7,"querystring":10}],20:[function(require,module,exports){
+function isNull(arg) {
+  return arg === null;
+}
+function isNullOrUndefined(arg) {
+  return  arg == null;
+}
+
+},{"punycode":8,"querystring":11}],21:[function(require,module,exports){
 module.exports = function isBuffer(arg) {
   return arg && typeof arg === 'object'
     && typeof arg.copy === 'function'
     && typeof arg.fill === 'function'
     && typeof arg.readUInt8 === 'function';
 }
-},{}],21:[function(require,module,exports){
+},{}],22:[function(require,module,exports){
 (function (process,global){
 // Copyright Joyent, Inc. and other Node contributors.
 //
@@ -5592,148 +5855,8 @@ function hasOwnProperty(obj, prop) {
   return Object.prototype.hasOwnProperty.call(obj, prop);
 }
 
-}).call(this,require("/home/doehlman/.bashinate/install/node/0.10.26/lib/node_modules/browserify/node_modules/insert-module-globals/node_modules/process/browser.js"),typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{"./support/isBuffer":20,"/home/doehlman/.bashinate/install/node/0.10.26/lib/node_modules/browserify/node_modules/insert-module-globals/node_modules/process/browser.js":6,"inherits":5}],22:[function(require,module,exports){
-/* jshint node: true */
-'use strict'
-
-/**
-  # rtc-mesh demo
-
-  This is a demonstration application that illustrates how
-  [rtc-mesh](https://github.com/rtc-io/rtc-mesh) can be used to assist
-  with managing shared client state using WebRTC data channels.
-
-  ## Running the Demo
-
-  If you wish to run this demo locally, then you can run the following:
-
-  ```
-  npm install beefy browserify -g
-
-  git clone
-  cd rtcio-demo-mesh
-  beefy index.js:bundle.js
-  ```
-**/
-
-var mesh = require('rtc-mesh');
-var quickconnect = require('rtc-quickconnect');
-var crel = require('crel');
-var uuid = require('uuid');
-
-// set this to true to update as moving, scaling, rotating events occur
-var canvas;
-var dynamicUpdates = false;
-
-// initialise the connection
-var qc = quickconnect('http://rtc.io/switchboard', {
-  // debug: true,
-  room: 'rtcio-demo-mesh',
-  iceServers: require('freeice')()
-});
-
-// create the shared model
-var model = mesh(qc);
-
-function addObject(obj, label) {
-  // add the object to the canvas
-  canvas.add(obj);
-
-  // tag the object
-  obj._label = label || uuid.v4();
-
-  // add the object into mesh data
-  model.set(obj._label, obj.toJSON());
-}
-
-function checkInit() {
-  console.log('checking if initialization required');
-
-  if (model.get('startrect')) {
-    return;
-  }
-
-  addObject(new fabric.Text('hello', {
-    left: 210,
-    top: 100
-  }), 'testlabel');
-
-  addObject(new fabric.Rect({
-    left: 100,
-    top: 100,
-    fill: 'blue',
-    height: 100,
-    width: 100
-  }), 'startrect');
-}
-
-function updateState(evt) {
-  // TODO: debounce
-  if (evt.target && evt.target._label) {
-    model.set(evt.target._label, evt.target.toJSON());
-  }
-}
-
-function remoteUpdate(data, clock, srcId) {
-  var key;
-  var target;
-
-  console.log('captured remote update', arguments);
-
-  if (srcId === model.id) {
-    return;
-  }
-
-  key = data[0];
-  target = canvas._objects.filter(function(obj) {
-    return obj._label === key;
-  })[0];
-
-  // if we don't have the target, then add the target
-  if (! target) {
-    // use fabric deserialization
-    fabric.util.enlivenObjects([data[1]], function(objects) {
-      objects[0]._label = key;
-      canvas.add(objects[0]);
-    });
-  }
-  else {
-    target.set(data[1]);
-    canvas.renderAll();
-  }
-}
-
-model.on('update', remoteUpdate);
-model.on('sync', checkInit);
-
-qc.on('roominfo', function(data) {
-  console.log('room info: ', data);
-  // if when we join we are the only member, initilaise the canvas
-  if (data && data.memberCount === 1) {
-    checkInit();
-  }
-});
-
-document.body.appendChild(crel('canvas', {
-  id: 'c',
-  width: window.innerWidth,
-  height: window.innerHeight
-}));
-
-canvas = new fabric.Canvas('c');
-canvas.on('object:modified', updateState);
-
-// if dynamic updates are enabled then communicate changes
-// as they are happening in the UI
-if (dynamicUpdates) {
-  canvas.on({
-    'object:moving': updateState,
-    'object:scaling': updateState,
-    'object:rotating': updateState
-  });
-}
-},{"crel":27,"freeice":28,"rtc-mesh":30,"rtc-quickconnect":39,"uuid":72}],23:[function(require,module,exports){
+}).call(this,require("/home/doehlman/code/rtc.io/demo-mesh/node_modules/browserify/node_modules/insert-module-globals/node_modules/process/browser.js"),typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
+},{"./support/isBuffer":21,"/home/doehlman/code/rtc.io/demo-mesh/node_modules/browserify/node_modules/insert-module-globals/node_modules/process/browser.js":7,"inherits":6}],23:[function(require,module,exports){
 /* jshint node: true */
 'use strict';
 
@@ -5861,7 +5984,8 @@ module.exports = function(input) {
   // determine whether we should JSON.parse the input
   shouldParse =
     (firstChar == '{' && lastChar == '}') ||
-    (firstChar == '[' && lastChar == ']');
+    (firstChar == '[' && lastChar == ']') ||
+    (firstChar == '"' && lastChar == '"');
 
   if (shouldParse) {
     try {
@@ -6011,6 +6135,59 @@ logger.enable = function() {
   return logger;
 };
 },{}],27:[function(require,module,exports){
+/* jshint node: true */
+'use strict';
+
+/**
+  ## cog/throttle
+
+  ```js
+  var throttle = require('cog/throttle');
+  ```
+
+  ### throttle(fn, delay, opts)
+
+  A cherry-pickable throttle function.  Used to throttle `fn` to ensure
+  that it can be called at most once every `delay` milliseconds.  Will
+  fire first event immediately, ensuring the next event fired will occur
+  at least `delay` milliseconds after the first, and so on.
+
+**/
+module.exports = function(fn, delay, opts) {
+  var lastExec = (opts || {}).leading !== false ? 0 : Date.now();
+  var trailing = (opts || {}).trailing;
+  var timer;
+  var queuedArgs;
+  var queuedScope;
+
+  // trailing defaults to true
+  trailing = trailing || trailing === undefined;
+  
+  function invokeDefered() {
+    fn.apply(queuedScope, queuedArgs || []);
+    lastExec = Date.now();
+  }
+
+  return function() {
+    var tick = Date.now();
+    var elapsed = tick - lastExec;
+
+    // always clear the defered timer
+    clearTimeout(timer);
+
+    if (elapsed < delay) {
+      queuedArgs = [].slice.call(arguments, 0);
+      queuedScope = this;
+
+      return trailing && (timer = setTimeout(invokeDefered, delay - elapsed));
+    }
+
+    // call the function
+    lastExec = tick;
+    fn.apply(this, arguments);
+  };
+};
+},{}],28:[function(require,module,exports){
 //Copyright (C) 2012 Kory Nunn
 
 //Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
@@ -6057,7 +6234,7 @@ logger.enable = function() {
     }
 }(this, function () {
     // based on http://stackoverflow.com/questions/384286/javascript-isdom-how-do-you-check-if-a-javascript-object-is-a-dom-object
-    var isNode = typeof Node === 'object'
+    var isNode = typeof Node === 'function'
         ? function (object) { return object instanceof Node; }
         : function (object) {
             return object
@@ -6142,7 +6319,7 @@ logger.enable = function() {
     return crel;
 }));
 
-},{}],28:[function(require,module,exports){
+},{}],29:[function(require,module,exports){
 /* jshint node: true */
 'use strict';
 
@@ -6230,7 +6407,7 @@ var freeice = module.exports = function(opts) {
 
   return selected;
 };
-},{"./servers":29}],29:[function(require,module,exports){
+},{"./servers":30}],30:[function(require,module,exports){
 // STUN servers
 exports.stun = [
   'stun.l.google.com:19302',
@@ -6244,7 +6421,7 @@ exports.stun = [
   'stun.rixtelecom.se',
   'stun.schlund.de',
   'stunserver.org',
-  'stun.softjoys.com',
+  // 'stun.softjoys.com',
   'stun.stunprotocol.org:3478',
   // 'stun.turnservers.com:3478',
   'stun.voiparound.com',
@@ -6256,7 +6433,7 @@ exports.stun = [
 exports.turn = [
 ];
 
-},{}],30:[function(require,module,exports){
+},{}],31:[function(require,module,exports){
 /* jshint node: true */
 'use strict';
 
@@ -6293,15 +6470,33 @@ var Model = require('scuttlebutt/model');
 
   <<< examples/multichannel.js
 
+  ## Reference
+
 **/
 
+/**
+  ### mesh
+
+  ```
+  mesh(qc, opts?) => Model
+  ```
+
+  As displayed in the examples, the `mesh` function expects to be passed a
+  [quickconnect](https://github.com/rtc-io/rtc-quickconnect) created signaller. Using
+  this object, it will create a data channel that will be responsible for sharing
+  [scuttlebutt](https://github.com/dominictarr/scuttlebutt) model information with peers.
+
+  In addition to the functions exposed by a scuttlebutt Model, the following helpers
+  have also been added:
+
+**/
 module.exports = function(qc, opts) {
   // create the model
   var model = (opts || {}).model || new Model();
   var name = (opts || {}).channelName || 'mesh';
   var channels = {};
 
-  function joinMesh(dc, id) {
+  function joinMesh(id, dc) {
     // create a new stream
     var stream = dcstream(dc);
     var reader = model.createReadStream();
@@ -6316,6 +6511,14 @@ module.exports = function(qc, opts) {
       console.warn('captured stream error: ', err.message)
     });
 
+    reader.on('error', function(err) {
+      console.warn('captured reader stream error: ', err.message);
+    });
+
+    writer.on('error', function(err) {
+      console.warn('captured writer stream error: ', err.message);
+    });
+
     // connect the stream to the data
     reader.pipe(stream).pipe(writer);
 
@@ -6323,19 +6526,54 @@ module.exports = function(qc, opts) {
     writer.on('sync', model.emit.bind(model, 'sync'));
   }
 
+  function joinMeshDeprecated(dc, id) {
+    joinMesh(id, dc);
+  }
+
   function leaveMesh(id) {
     // remove the channel reference
     channels[id] = null;
   }
 
+  /**
+    #### retrieve
+
+    ```
+    retrieve(key, callback)
+    ```
+
+    Get the value of the specified key and pass the result back through the
+    provided `callback` (node error first style).  If the value is already
+    available in the local Model, then the callback will be triggered immediately.
+    If not, the callback will be triggered once the value has been set in the
+    local Model.
+  **/
+  function retrieve(key, callback) {
+    var value = model.get(key);
+
+    // if we have the value, then trigger the callback immediately
+    if (typeof value != 'undefined') {
+      return callback(null, value);
+    }
+
+    // otherwise, wait for the value
+    model.once('change:' + key, callback.bind(model, null));
+  }
+
+  // patch in the retrieveValue function
+  model.retrieve = retrieve;
+
   // create the data channel
   qc.createDataChannel(name, (opts || {}).channelOpts)
-    .on(name + ':open', joinMesh)
-    .on(name + ':close', leaveMesh);
+    .on(name + ':open', joinMeshDeprecated)
+    .on('channel:opened:' + name, joinMesh)
+    .on(name + ':close', leaveMesh)
+    .on('channel:closed:' + name, leaveMesh);
 
   return model;
 };
-},{"cog/logger":26,"rtc-dcstream":31,"scuttlebutt/model":33}],31:[function(require,module,exports){
+
+},{"cog/logger":26,"rtc-dcstream":32,"scuttlebutt/model":34}],32:[function(require,module,exports){
 (function (Buffer){
 /* jshint node: true */
 'use strict';
@@ -6547,7 +6785,7 @@ function handleChannelOpen(evt) {
   sendNext(queue.shift());
 }
 }).call(this,require("buffer").Buffer)
-},{"buffer":1,"cog/logger":26,"stream":12,"util":21}],32:[function(require,module,exports){
+},{"buffer":2,"cog/logger":26,"stream":13,"util":22}],33:[function(require,module,exports){
 (function (process){
 var EventEmitter = require('events').EventEmitter
 var i = require('iterate')
@@ -6864,8 +7102,8 @@ sb.clone = function () {
 }
 
 
-}).call(this,require("/home/doehlman/.bashinate/install/node/0.10.26/lib/node_modules/browserify/node_modules/insert-module-globals/node_modules/process/browser.js"))
-},{"./util":38,"/home/doehlman/.bashinate/install/node/0.10.26/lib/node_modules/browserify/node_modules/insert-module-globals/node_modules/process/browser.js":6,"duplex":34,"events":4,"iterate":35,"monotonic-timestamp":36,"stream-serializer":37,"util":21}],33:[function(require,module,exports){
+}).call(this,require("/home/doehlman/code/rtc.io/demo-mesh/node_modules/browserify/node_modules/insert-module-globals/node_modules/process/browser.js"))
+},{"./util":39,"/home/doehlman/code/rtc.io/demo-mesh/node_modules/browserify/node_modules/insert-module-globals/node_modules/process/browser.js":7,"duplex":35,"events":5,"iterate":36,"monotonic-timestamp":37,"stream-serializer":38,"util":22}],34:[function(require,module,exports){
 var Scuttlebutt = require('./index')
 var inherits = require('util').inherits
 var each = require('iterate').each
@@ -6953,7 +7191,7 @@ m.toJSON = function () {
   return o
 }
 
-},{"./index":32,"./util":38,"iterate":35,"util":21}],34:[function(require,module,exports){
+},{"./index":33,"./util":39,"iterate":36,"util":22}],35:[function(require,module,exports){
 (function (process){
 var Stream = require('stream')
 
@@ -7100,8 +7338,8 @@ module.exports = function (write, end) {
 }
 
 
-}).call(this,require("/home/doehlman/.bashinate/install/node/0.10.26/lib/node_modules/browserify/node_modules/insert-module-globals/node_modules/process/browser.js"))
-},{"/home/doehlman/.bashinate/install/node/0.10.26/lib/node_modules/browserify/node_modules/insert-module-globals/node_modules/process/browser.js":6,"stream":12}],35:[function(require,module,exports){
+}).call(this,require("/home/doehlman/code/rtc.io/demo-mesh/node_modules/browserify/node_modules/insert-module-globals/node_modules/process/browser.js"))
+},{"/home/doehlman/code/rtc.io/demo-mesh/node_modules/browserify/node_modules/insert-module-globals/node_modules/process/browser.js":7,"stream":13}],36:[function(require,module,exports){
 
 //
 // adds all the fields from obj2 onto obj1
@@ -7255,7 +7493,7 @@ var join = exports.join = function (A, B, it) {
   })
 }
 
-},{}],36:[function(require,module,exports){
+},{}],37:[function(require,module,exports){
 // If `Date.now()` is invoked twice quickly, it's possible to get two
 // identical time stamps. To avoid generation duplications, subsequent
 // calls are manually ordered to force uniqueness.
@@ -7302,7 +7540,7 @@ function timestamp() {
   return adjusted
 }
 
-},{}],37:[function(require,module,exports){
+},{}],38:[function(require,module,exports){
 
 var EventEmitter = require('events').EventEmitter
 
@@ -7373,7 +7611,7 @@ exports.raw = function (stream) {
 }
 
 
-},{"events":4}],38:[function(require,module,exports){
+},{"events":5}],39:[function(require,module,exports){
 exports.createId = 
 function () {
   return [1,1,1].map(function () {
@@ -7411,19 +7649,20 @@ exports.sort = function (hist) {
   })
 }
 
-},{}],39:[function(require,module,exports){
+},{}],40:[function(require,module,exports){
+(function (process){
 /* jshint node: true */
 'use strict';
 
 var EventEmitter = require('events').EventEmitter;
 var rtc = require('rtc');
+var cleanup = require('rtc/cleanup');
 var debug = rtc.logger('rtc-quickconnect');
 var signaller = require('rtc-signaller');
 var defaults = require('cog/defaults');
 var extend = require('cog/extend');
+var FastMap = require('collections/fast-map');
 var reTrailingSlash = /\/$/;
-var CHANNEL_HEARTBEAT = '__heartbeat';
-var HEARTBEAT = new Uint8Array([0x10]);
 
 /**
   # rtc-quickconnect
@@ -7435,12 +7674,90 @@ var HEARTBEAT = new Uint8Array([0x10]);
   [rtc.io](http://www.rtc.io) suite.  In particular you should check out
   [rtc](https://github.com/rtc-io/rtc).
 
+  ## Upgrading to 1.0
+
+  The [upgrading to 1.0 documentation](https://github.com/rtc-io/rtc-quickconnect/blob/master/docs/upgrading-to-1.0.md)
+  provides some information on what you need to change to upgrade to
+  `rtc-quickconnect@1.0`.  Additionally, the
+  [quickconnect demo app](https://github.com/rtc-io/rtcio-demo-quickconnect)
+  has been updated which should provide some additional information.
+
   ## Example Usage
 
   In the simplest case you simply call quickconnect with a single string
   argument which tells quickconnect which server to use for signaling:
 
   <<< examples/simple.js
+
+  ## Events
+
+  The following events are emitted from the signalling object created by
+  calling `quickconnect()`:
+
+  ### Call Level Events
+
+  A "call" in quickconnect is equivalent to an established `RTCPeerConnection`
+  between this quickconnect instance a remote peer.
+
+  - `call:started => function(id, peerconnection, data)`
+
+    Triggered once a peer connection has been established been established
+    between this quickconnect instance and another.
+
+  - `call:ended => function(id)`
+
+    Triggered when a peer connection has been closed.  This may be due to the
+    peer connection itself indicating that it has been closed, or we may have
+    lost connection with the remote signaller and the connection has timed out.
+
+  ### Data Channel Level Events
+
+  - `channel:opened => function(id, datachannel, data)`
+
+    The `channel:opened` event is triggered whenever an `RTCDataChannel` has
+    been opened (it's ready to send data) to a remote peer.
+
+  - `channel:opened:%label% => function(id, datachannel, data)`
+
+    This is equivalent of the `channel:opened` event, but only triggered for
+    a channel with label `%label%`.  For example:
+
+    ```js
+    quickconnect('http://rtc.io/switchboard', { room: 'test' })
+      .createDataChannel('foo')
+      .createDataChannel('bar')
+      .on('channel:opened:foo', function(id, dc) {
+        console.log('channel foo opened for peer: ' + id);
+      });
+    ```
+
+    In the case above the console message would only be displayed for the
+    `foo` channel once open, and when the `bar` channel is opened no handler
+    would be invoked.
+
+  - `channel:closed => function(id, datachannel, label)`
+
+    Emitted when the channel has been closed, works when a connection has
+    been closed or the channel itself has been closed.
+
+  - `channel:closed:%label% => function(id, datachannel, label)`
+
+    The label specific equivalent of `channel:closed`.
+
+  ### Stream Level Events
+
+  - `stream:added => function(id, stream, data)`
+
+    The `stream:added` event is triggered when an `RTCPeerConnection` has
+    successfully been established to another peer that contains remote
+    streams.  Additionally, if you are using quickconnect in it's "reactive"
+    mode then you will also receive `stream:added` events as streams are
+    dynamically added to the connection by the remote peer.
+
+  - `stream:removed => function(id)`
+
+    As per the `stream:added` event but triggered when a stream has been
+    removed.
 
   ## Example Usage (using data channels)
 
@@ -7483,28 +7800,6 @@ var HEARTBEAT = new Uint8Array([0x10]);
   a little.  If you need something more stable, why not consider deploying
   an instance of the switchboard yourself - it's pretty easy :)
 
-  ## Handling Peer Disconnection
-
-  __NOTE:__ This functionality is experimental and still in testing, it is
-  recommended that you continue to use the `peer:leave` events at this stage.
-
-  Since version `0.11` the following events are also emitted by quickconnect
-  objects:
-
-  - `peer:disconnect`
-  - `%label%:close` where `%label%` is the label of the channel
-     you provided in a `createDataChannel` call.
-
-  Basically the `peer:disconnect` can be used as a more accurate version
-  of the `peer:leave` message.  While the `peer:leave` event triggers when
-  the background signaller disconnects, the `peer:disconnect` event is
-  trigger when the actual WebRTC peer connection is closed.
-
-  At present (due to limited browser support for handling peer close events
-  and the like) this is implemented by creating a heartbeat data channel
-  which sends messages on a regular basis between the peers.  When these
-  messages are stopped being received the connection is considered closed.
-
   ## Reference
 
   ```
@@ -7543,10 +7838,10 @@ var HEARTBEAT = new Uint8Array([0x10]);
   [rtc.createConnection](https://github.com/rtc-io/rtc#createconnectionopts-constraints)
   function:
 
-  - `constraints`
+  - `iceServers`
 
-    Used to provide specific constraints when creating a new
-    peer connection.
+  This provides a list of ice servers that can be used to help negotiate a
+  connection between peers.
 
   #### Options for P2P negotiation
 
@@ -7557,93 +7852,240 @@ var HEARTBEAT = new Uint8Array([0x10]);
 **/
 module.exports = function(signalhost, opts) {
   var hash = typeof location != 'undefined' && location.hash.slice(1);
-  var signaller = require('rtc-signaller')(signalhost);
+  var signaller = require('rtc-signaller')(signalhost, opts);
 
   // init configurable vars
   var ns = (opts || {}).ns || '';
   var room = (opts || {}).room;
   var debugging = (opts || {}).debug;
-  var disableHeartbeat = (opts || {}).disableHeartbeat;
-  var heartbeatInterval = (opts || {}).heartbeatInterval || 1000;
-  var heartbeatTimeout = (opts || {}).heartbeatTimeout || heartbeatInterval * 3;
   var profile = {};
   var announced = false;
 
   // collect the local streams
   var localStreams = [];
 
-  // create the peers registry
-  var peers = {};
+  // create the calls map
+  var calls = signaller.calls = new FastMap();
 
   // create the known data channels registry
   var channels = {};
 
-  function gotPeerChannel(channel, pc, data) {
-    // create the channelOpen function
-    var emitChannelOpen = signaller.emit.bind(
-      signaller,
-      channel.label + ':open',
-      channel,
-      data.id,
-      data,
-      pc
-    );
-
-    debug('channel ' + channel.label + ' discovered for peer: ' + data.id, channel);
-    if (channel.readyState === 'open') {
-      return emitChannelOpen();
-    }
-
-    channel.onopen = emitChannelOpen;
+  function callCreate(id, pc, data) {
+    calls.set(id, {
+      active: false,
+      pc: pc,
+      channels: new FastMap(),
+      data: data,
+      streams: []
+    });
   }
 
-  function initHeartbeat(channel, pc, data) {
-    var hbTimeoutTimer;
-    var hbTimer;
+  function callEnd(id) {
+    var call = calls.get(id);
 
-    function timeoutConnection() {
-      // console.log(Date.now() + ', connection with ' + data.id + ' timed out');
-
-      // trigger a peer disconnect event
-      signaller.emit('peer:disconnect', data.id);
-
-      // trigger close events for each of the channels
-      Object.keys(channels).forEach(function(channel) {
-        signaller.emit(channel + ':close');
-      });
-
-      // clear the peer reference
-      peers[data.id] = undefined;
-
-      // stop trying to send heartbeat messages
-      clearInterval(hbTimer);
+    // if we have no data, then do nothing
+    if (! call) {
+      return;
     }
 
-    // console.log('created heartbeat channel for peer: ' + data.id);
+    debug('ending call to: ' + id);
 
-    // start monitoring using the heartbeat channel to keep tabs on our
-    // peers availability
-    channel.onmessage = function(evt) {
-      // console.log(Date.now() + ', ' + data.id + ': ' + evt.data);
+    // if we have no data, then return
+    call.channels.keys().forEach(function(label) {
+      var args = [id, call.channels.get(label), label];
 
-      // console.log('received hearbeat message: ' + evt.data)
-      clearTimeout(hbTimeoutTimer);
-      hbTimeoutTimer = setTimeout(timeoutConnection, heartbeatTimeout);
+      // emit the plain channel:closed event
+      signaller.emit.apply(signaller, ['channel:closed'].concat(args));
 
-      // emit the heartbeat for the appropriate connection
-      signaller.emit('hb:' + data.id);
+      // emit the labelled version of the event
+      signaller.emit.apply(signaller, ['channel:closed:' + label].concat(args));
+    });
+
+    // trigger stream:removed events for each of the remotestreams in the pc
+    call.streams.forEach(function(stream) {
+      signaller.emit('stream:removed', id, stream);
+    });
+
+    // trigger the call:ended event
+    signaller.emit('call:ended', id, call.pc);
+
+    // ensure the peer connection is properly cleaned up
+    cleanup(call.pc);
+
+    // delete the call data
+    calls.delete(id);
+  }
+
+  function callStart(id, pc, data) {
+    var call = calls.get(id);
+    var streams = [].concat(pc.getRemoteStreams());
+
+    // flag the call as active
+    call.active = true;
+    call.streams = [].concat(pc.getRemoteStreams());
+
+    pc.onaddstream = createStreamAddHandler(id);
+    pc.onremovestream = createStreamRemoveHandler(id);
+
+    debug(signaller.id + ' - ' + id + ' call start: ' + streams.length + ' streams');
+    signaller.emit('call:started', id, pc, data);
+
+    // examine the existing remote streams after a short delay
+    process.nextTick(function() {
+      // iterate through any remote streams
+      streams.forEach(receiveRemoteStream(id));
+    });
+  }
+
+  function createStreamAddHandler(id) {
+    return function(evt) {
+      debug('peer ' + id + ' added stream');
+      updateRemoteStreams(id);
+      receiveRemoteStream(id)(evt.stream);
+    }
+  }
+
+  function createStreamRemoveHandler(id) {
+    return function(evt) {
+      debug('peer ' + id + ' removed stream');
+      updateRemoteStreams(id);
+      signaller.emit('stream:removed', id, evt.stream);
     };
+  }
 
-    hbTimer  = setInterval(function() {
-      // if the channel is not yet, open then abort
-      if (channel.readyState !== 'open') {
-        // TODO: clear the interval if we have previously been sending
-        // messages
-        return;
+  function getActiveCall(peerId) {
+    var call = calls.get(peerId);
+
+    if (! call) {
+      throw new Error('No active call for peer: ' + peerId);
+    }
+
+    return call;
+  }
+
+  function gotPeerChannel(channel, pc, data) {
+    var channelMonitor;
+
+    function channelReady() {
+      var call = calls.get(data.id);
+      var args = [ data.id, channel, data, pc ];
+
+      // decouple the channel.onopen listener
+      debug('reporting channel "' + channel.label + '" ready, have call: ' + (!!call));
+      clearInterval(channelMonitor);
+      channel.onopen = null;
+
+      // save the channel
+      if (call) {
+        call.channels.set(channel.label, channel);
       }
 
-      channel.send(HEARTBEAT);
-    }, heartbeatInterval);
+      // trigger the %channel.label%:open event
+      debug('triggering channel:opened events for channel: ' + channel.label);
+
+      // emit the plain channel:opened event
+      signaller.emit.apply(signaller, ['channel:opened'].concat(args));
+
+      // emit the channel:opened:%label% eve
+      signaller.emit.apply(
+        signaller,
+        ['channel:opened:' + channel.label].concat(args)
+      );
+    }
+
+    debug('channel ' + channel.label + ' discovered for peer: ' + data.id);
+    if (channel.readyState === 'open') {
+      return channelReady();
+    }
+
+    debug('channel not ready, current state = ' + channel.readyState);
+    channel.onopen = channelReady;
+
+    // monitor the channel open (don't trust the channel open event just yet)
+    channelMonitor = setInterval(function() {
+      debug('checking channel state, current state = ' + channel.readyState);
+      if (channel.readyState === 'open') {
+        channelReady();
+      }
+    }, 500);
+  }
+
+  function handlePeerAnnounce(data) {
+    var pc;
+    var monitor;
+
+    // if the room is not a match, abort
+    if (data.room !== room) {
+      return;
+    }
+
+    // create a peer connection
+    pc = rtc.createConnection(opts, (opts || {}).constraints);
+
+    // add this connection to the calls list
+    callCreate(data.id, pc, data);
+
+    // add the local streams
+    localStreams.forEach(function(stream, idx) {
+      pc.addStream(stream);
+    });
+
+    // add the data channels
+    // do this differently based on whether the connection is a
+    // master or a slave connection
+    if (signaller.isMaster(data.id)) {
+      debug('is master, creating data channels: ', Object.keys(channels));
+
+      // create the channels
+      Object.keys(channels).forEach(function(label) {
+       gotPeerChannel(pc.createDataChannel(label, channels[label]), pc, data);
+      });
+    }
+    else {
+      pc.ondatachannel = function(evt) {
+        var channel = evt && evt.channel;
+
+        // if we have no channel, abort
+        if (! channel) {
+          return;
+        }
+
+        if (channels[channel.label] !== undefined) {
+          gotPeerChannel(channel, pc, data);
+        }
+      };
+    }
+
+    // couple the connections
+    debug('coupling ' + signaller.id + ' to ' + data.id);
+    monitor = rtc.couple(pc, data.id, signaller, opts);
+
+    // once active, trigger the peer connect event
+    monitor.once('connected', callStart.bind(null, data.id, pc, data))
+    monitor.once('closed', callEnd.bind(null, data.id));
+
+    // if we are the master connnection, create the offer
+    // NOTE: this only really for the sake of politeness, as rtc couple
+    // implementation handles the slave attempting to create an offer
+    if (signaller.isMaster(data.id)) {
+      monitor.createOffer();
+    }
+  }
+
+  function receiveRemoteStream(id) {
+    var call = calls.get(id);
+
+    return function(stream) {
+      signaller.emit('stream:added', id, stream, call && call.data);
+    };
+  }
+
+  function updateRemoteStreams(id) {
+    var call = calls.get(id);
+
+    if (call && call.pc) {
+      call.streams = [].concat(call.pc.getRemoteStreams());
+    }
   }
 
   // if the room is not defined, then generate the room name
@@ -7660,83 +8102,8 @@ module.exports = function(signalhost, opts) {
     rtc.logger.enable.apply(rtc.logger, Array.isArray(debug) ? debugging : ['*']);
   }
 
-  signaller.on('peer:announce', function(data) {
-    var pc;
-    var monitor;
-
-    // if the room is not a match, abort
-    if (data.room !== room) {
-      return;
-    }
-
-    // create a peer connection
-    pc = peers[data.id] = rtc.createConnection(opts, (opts || {}).constraints);
-
-    // add the local streams
-    localStreams.forEach(function(stream) {
-      pc.addStream(stream);
-    });
-
-    // add the data channels
-    // do this differently based on whether the connection is a
-    // master or a slave connection
-    if (signaller.isMaster(data.id)) {
-      debug('is master, creating data channels: ', Object.keys(channels));
-
-      // unless the heartbeat is disabled then create a heartbeat datachannel
-      if (! disableHeartbeat) {
-        initHeartbeat(
-          pc.createDataChannel(CHANNEL_HEARTBEAT, {
-            ordered: false
-          }),
-          pc,
-          data
-        );
-      }
-
-      // create the channels
-      Object.keys(channels).forEach(function(label) {
-        gotPeerChannel(pc.createDataChannel(label, channels[label]), pc, data);
-      });
-    }
-    else {
-      pc.ondatachannel = function(evt) {
-        var channel = evt && evt.channel;
-
-        // if we have no channel, abort
-        if (! channel) {
-          return;
-        }
-
-        // if the channel is the heartbeat, then init the heartbeat
-        if (channel.label === CHANNEL_HEARTBEAT) {
-          initHeartbeat(channel, pc, data);
-        }
-        // otherwise, if this is a known channel, initialise it
-        else if (channels[channel.label] !== undefined) {
-          gotPeerChannel(channel, pc, data);
-        }
-      };
-    }
-
-    // couple the connections
-    monitor = rtc.couple(pc, data.id, signaller, opts);
-
-    // emit the peer event as per <= rtc-quickconnect@0.7
-    signaller.emit('peer', pc, data.id, data, monitor);
-
-    // once active, trigger the peer connect event
-    monitor.once('active', function() {
-      signaller.emit('peer:connect', pc, data.id, data);
-    });
-
-    // if we are the master connnection, create the offer
-    // NOTE: this only really for the sake of politeness, as rtc couple
-    // implementation handles the slave attempting to create an offer
-    if (signaller.isMaster(data.id)) {
-      monitor.createOffer();
-    }
-  });
+  signaller.on('peer:announce', handlePeerAnnounce);
+  signaller.on('peer:leave', callEnd);
 
   // announce ourselves to our new friend
   setTimeout(function() {
@@ -7754,18 +8121,28 @@ module.exports = function(signalhost, opts) {
     The following are functions that are patched into the `rtc-signaller`
     instance that make working with and creating functional WebRTC applications
     a lot simpler.
-    
+
   **/
 
   /**
-    #### broadcast(stream)
+    #### addStream
 
-    Add the stream to the set of local streams that we will broadcast
-    to other peers.
+    ```
+    addStream(stream:MediaStream) => qc
+    ```
+
+    Add the stream to active calls and also save the stream so that it
+    can be added to future calls.
 
   **/
-  signaller.broadcast = function(stream) {
+  signaller.broadcast = signaller.addStream = function(stream) {
     localStreams.push(stream);
+
+    // if we have any active calls, then add the stream
+    calls.values().forEach(function(data) {
+      data.pc.addStream(stream);
+    });
+
     return signaller;
   };
 
@@ -7776,14 +8153,11 @@ module.exports = function(signalhost, opts) {
     peer connections.
   **/
   signaller.close = function() {
-    Object.keys(peers).forEach(function(id) {
-      if (peers[id]) {
-        peers[id].close();
-      }
-    });
+    // end each of the active calls
+    calls.keys().forEach(callEnd);
 
-    // reset the peer references
-    peers = {};
+    // call the underlying signaller.leave (for which close is an alias)
+    signaller.leave();
   };
 
   /**
@@ -7805,15 +8179,155 @@ module.exports = function(signalhost, opts) {
 
   **/
   signaller.createDataChannel = function(label, opts) {
+    // create a channel on all existing calls
+    calls.keys().forEach(function(peerId) {
+      var call = calls.get(peerId);
+      var dc;
+
+      // if we are the master connection, create the data channel
+      if (call && call.pc && signaller.isMaster(peerId)) {
+        dc = call.pc.createDataChannel(label, opts);
+        gotPeerChannel(dc, call.pc, call.data);
+      }
+    });
+
     // save the data channel opts in the local channels dictionary
     channels[label] = opts || null;
+
+    return signaller;
+  };
+
+  /**
+    #### reactive()
+
+    Flag that this session will be a reactive connection.
+
+  **/
+  signaller.reactive = function() {
+    // add the reactive flag
+    opts = opts || {};
+    opts.reactive = true;
+
+    // chain
+    return signaller;
+  };
+
+  /**
+    #### removeStream
+
+    ```
+    removeStream(stream:MediaStream)
+    ```
+
+    Remove the specified stream from both the local streams that are to
+    be connected to new peers, and also from any active calls.
+
+  **/
+  signaller.removeStream = function(stream) {
+    var localIndex = localStreams.indexOf(stream);
+
+    // remove the stream from any active calls
+    calls.values().forEach(function(call) {
+      call.pc.removeStream(stream);
+    });
+
+    // remove the stream from the localStreams array
+    if (localIndex >= 0) {
+      localStreams.splice(localIndex, 1);
+    }
+
+    return signaller;
+  };
+
+  /**
+    #### requestChannel
+
+    ```
+    requestChannel(targetId, label, callback)
+    ```
+
+    This is a function that can be used to respond to remote peers supplying
+    a data channel as part of their configuration.  As per the `receiveStream`
+    function this function will either fire the callback immediately if the
+    channel is already available, or once the channel has been discovered on
+    the call.
+
+  **/
+  signaller.requestChannel = function(targetId, label, callback) {
+    var call = getActiveCall(targetId);
+    var channel;
+
+    function waitForChannel() {
+      call.channels.removeMapChangeListener(waitForChannel, label);
+      callback(null, call.channels.get(label));
+    }
+
+    channel = call.channels.get(label);
+
+    // if we have then channel trigger the callback immediately
+    if (channel) {
+      callback(null, channel);
+      return signaller;
+    }
+
+    // if not, wait for it
+    call.channels.addMapChangeListener(waitForChannel, label);
+
+    return signaller;
+  };
+
+  /**
+    #### requestStream
+
+    ```
+    requestStream(targetId, idx, callback)
+    ```
+
+    Used to request a remote stream from a quickconnect instance. If the
+    stream is already available in the calls remote streams, then the callback
+    will be triggered immediately, otherwise this function will monitor
+    `stream:added` events and wait for a match.
+
+    In the case that an unknown target is requested, then an exception will
+    be thrown.
+  **/
+  signaller.requestStream = function(targetId, idx, callback) {
+    var call = getActiveCall(targetId);
+    var stream;
+
+    function waitForStream(peerId) {
+      if (peerId !== targetId) {
+        return;
+      }
+
+      // get the stream
+      stream = call.pc.getRemoteStreams()[idx];
+
+      // if we have the stream, then remove the listener and trigger the cb
+      if (stream) {
+        signaller.removeListener('stream:added', waitForStream);
+        callback(null, stream);
+      }
+    }
+
+    // look for the stream in the remote streams of the call
+    stream = call.pc.getRemoteStreams()[idx];
+
+    // if we found the stream then trigger the callback
+    if (stream) {
+      callback(null, stream);
+      return signaller;
+    }
+
+    // otherwise wait for the stream
+    signaller.on('stream:added', waitForStream);
     return signaller;
   };
 
   /**
     #### profile(data)
 
-    Update the profile data with the attached information, so when 
+    Update the profile data with the attached information, so when
     the signaller announces it includes this data in addition to any
     room and id information.
 
@@ -7826,706 +8340,44 @@ module.exports = function(signalhost, opts) {
     if (announced) {
       signaller.announce(profile);
     }
-    
+
     return signaller;
+  };
+
+  /**
+    #### waitForCall
+
+    ```
+    waitForCall(targetId, callback)
+    ```
+
+    Wait for a call from the specified targetId.  If the call is already
+    active the callback will be fired immediately, otherwise we will wait
+    for a `call:started` event that matches the requested `targetId`
+
+  **/
+  signaller.waitForCall = function(targetId, callback) {
+    var call = calls.get(targetId);
+
+    if (call && call.active) {
+      callback(null, call.pc);
+      return signaller;
+    }
+
+    signaller.on('call:started', function handleNewCall(id) {
+      if (id === targetId) {
+        signaller.removeListener('call:started', handleNewCall);
+        callback(null, calls.get(id).pc);
+      }
+    });
   };
 
   // pass the signaller on
   return signaller;
 };
-},{"cog/defaults":23,"cog/extend":24,"events":4,"rtc":68,"rtc-signaller":44}],40:[function(require,module,exports){
-/* jshint node: true */
-/* global window: false */
-/* global navigator: false */
 
-'use strict';
-
-var browsers = {
-  chrome: /Chrom(?:e|ium)\/([0-9]+)\./,
-  firefox: /Firefox\/([0-9]+)\./,
-  opera: /Opera\/([0-9]+)\./
-};
-
-/**
-## rtc-core/detect
-
-A browser detection helper for accessing prefix-free versions of the various
-WebRTC types.
-
-### Example Usage
-
-If you wanted to get the native `RTCPeerConnection` prototype in any browser
-you could do the following:
-
-```js
-var detect = require('rtc-core/detect'); // also available in rtc/detect
-var RTCPeerConnection = detect('RTCPeerConnection');
-```
-
-This would provide whatever the browser prefixed version of the
-RTCPeerConnection is available (`webkitRTCPeerConnection`,
-`mozRTCPeerConnection`, etc).
-**/
-var detect = module.exports = function(target, prefixes) {
-  var prefixIdx;
-  var prefix;
-  var testName;
-  var hostObject = this || (typeof window != 'undefined' ? window : undefined);
-
-  // if we have no host object, then abort
-  if (! hostObject) {
-    return;
-  }
-
-  // initialise to default prefixes
-  // (reverse order as we use a decrementing for loop)
-  prefixes = (prefixes || ['ms', 'o', 'moz', 'webkit']).concat('');
-
-  // iterate through the prefixes and return the class if found in global
-  for (prefixIdx = prefixes.length; prefixIdx--; ) {
-    prefix = prefixes[prefixIdx];
-
-    // construct the test class name
-    // if we have a prefix ensure the target has an uppercase first character
-    // such that a test for getUserMedia would result in a
-    // search for webkitGetUserMedia
-    testName = prefix + (prefix ?
-                            target.charAt(0).toUpperCase() + target.slice(1) :
-                            target);
-
-    if (typeof hostObject[testName] != 'undefined') {
-      // update the last used prefix
-      detect.browser = detect.browser || prefix.toLowerCase();
-
-      // return the host object member
-      return hostObject[target] = hostObject[testName];
-    }
-  }
-};
-
-// detect mozilla (yes, this feels dirty)
-detect.moz = typeof navigator != 'undefined' && !!navigator.mozGetUserMedia;
-
-// time to do some useragent sniffing - it feels dirty because it is :/
-if (typeof navigator != 'undefined') {
-  Object.keys(browsers).forEach(function(key) {
-    var match = browsers[key].exec(navigator.userAgent);
-    if (match) {
-      detect.browser = key;
-      detect.browserVersion = detect.version = parseInt(match[1], 10);
-    }
-  });
-}
-else {
-  detect.browser = 'node';
-  detect.browserVersion = detect.version = '?'; // TODO: get node version
-}
-},{}],41:[function(require,module,exports){
-/* jshint node: true */
-'use strict';
-
-var debug = require('cog/logger')('rtc-signaller');
-var extend = require('cog/extend');
-var roles = ['a', 'b'];
-
-/**
-  #### announce
-
-  ```
-  /announce|{"id": "...", ... }
-  ```
-
-  When an announce message is received by the signaller, the attached
-  object data is decoded and the signaller emits an `announce` message.
-
-  ##### Events Triggered in response to `/announce`
-
-  There are three different types of `peer:` events that can be triggered
-  in on peer B to calling the `announce` method on peer A.
-
-  - `peer:filter`
-
-    The `peer:filter` event is triggered prior to the `peer:announce` or
-    `peer:update` events being fired and provides an application the
-    opportunity to reject a peer.  The handler for this event is passed
-    a JS object that contains a `data` attribute for the announce data, and an
-    `allow` flag that controls whether the peer is to be accepted.
-
-    Due to the way event emitters behave in node, the last handler invoked
-    is the authority on whether the peer is accepted or not (so make sure to
-    check the previous state of the allow flag):
-
-    ```js
-    // only accept connections from Bob
-    signaller.on('peer:filter', function(evt) {
-      evt.allow = evt.allow && (evt.data.name === 'Bob');
-    });
-    ```
-
-  - `peer:announce`
-
-    The `peer:announce` event is triggered when a new peer has been
-    discovered.  The data for the new peer (as an JS object) is provided
-    as the first argument of the event handler.
-
-  - `peer:update`
-
-    If a peer "reannounces" then a `peer:update` event will be triggered
-    rather than a `peer:announce` event.
-
-**/
-module.exports = function(signaller) {
-
-  function copyData(target, source) {
-    if (target && source) {
-      for (var key in source) {
-        target[key] = source[key];
-      }
-    }
-
-    return target;
-  }
-
-  function dataAllowed(data) {
-    var evt = {
-      data: data,
-      allow: true
-    };
-
-    signaller.emit('peer:filter', evt);
-
-    return evt.allow;
-  }
-
-  return function(args, messageType, srcData, srcState, isDM) {
-    var data = args[0];
-    var peer;
-
-    debug('announce handler invoked, received data: ', data);
-
-    // if we have valid data then process
-    if (data && data.id && data.id !== signaller.id) {
-      if (! dataAllowed(data)) {
-        return;
-      }
-      // check to see if this is a known peer
-      peer = signaller.peers.get(data.id);
-
-      // if the peer is existing, then update the data
-      if (peer && (! peer.inactive)) {
-        debug('signaller: ' + signaller.id + ' received update, data: ', data);
-
-        // update the data
-        copyData(peer.data, data);
-
-        // trigger the peer update event
-        return signaller.emit('peer:update', data, srcData);
-      }
-
-      // create a new peer
-      peer = {
-        id: data.id,
-
-        // initialise the local role index
-        roleIdx: [data.id, signaller.id].sort().indexOf(data.id),
-
-        // initialise the peer data
-        data: {}
-      };
-
-      // initialise the peer data
-      copyData(peer.data, data);
-
-      // set the peer data
-      signaller.peers.set(data.id, peer);
-
-      // if this is an initial announce message (no vector clock attached)
-      // then send a announce reply
-      if (signaller.autoreply && (! isDM)) {
-        signaller
-          .to(data.id)
-          .send('/announce', signaller.attributes);
-      }
-
-      // emit a new peer announce event
-      return signaller.emit('peer:announce', data, peer);
-    }
-  };
-};
-},{"cog/extend":24,"cog/logger":26}],42:[function(require,module,exports){
-/* jshint node: true */
-'use strict';
-
-/**
-  ### signaller message handlers
-
-**/
-
-module.exports = function(signaller) {
-  return {
-    announce: require('./announce')(signaller),
-    leave: require('./leave')(signaller)
-  };
-};
-},{"./announce":41,"./leave":43}],43:[function(require,module,exports){
-/* jshint node: true */
-'use strict';
-
-/**
-  #### leave
-
-  ```
-  /leave|{"id":"..."}
-  ```
-
-  When a leave message is received from a peer, we check to see if that is
-  a peer that we are managing state information for and if we are then the
-  peer state is removed.
-
-  ##### Events triggered in response to `/leave` messages
-
-  The following event(s) are triggered when a `/leave` action is received
-  from a peer signaller:
-
-  - `peer:leave`
-
-    The `peer:leave` event is emitted once a `/leave` message is captured
-    from a peer.  Prior to the event being dispatched, the internal peers
-    data in the signaller is removed but can be accessed in 2nd argument
-    of the event handler.
-
-**/
-module.exports = function(signaller) {
-  return function(args) {
-    var data = args[0];
-    var peer = signaller.peers.get(data && data.id);
-
-    // if we know about the peer, mark it as inactive
-    if (peer) {
-      peer.inactive = true;
-    }
-
-    // emit the event
-    signaller.emit('peer:leave', data.id, peer);
-  };
-};
-},{}],44:[function(require,module,exports){
-/* jshint node: true */
-'use strict';
-
-var debug = require('cog/logger')('rtc-signaller');
-var detect = require('rtc-core/detect');
-var EventEmitter = require('events').EventEmitter;
-var uuid = require('uuid');
-var extend = require('cog/extend');
-var FastMap = require('collections/fast-map');
-
-// initialise signaller metadata so we don't have to include the package.json
-// TODO: make this checkable with some kind of prepublish script
-var metadata = {
-  version: '0.18.3'
-};
-
-/**
-  # rtc-signaller
-
-  The `rtc-signaller` module provides a transportless signalling
-  mechanism for WebRTC.
-
-  ## Purpose
-
-  The signaller provides set of client-side tools that assist with the
-  setting up an `PeerConnection` and helping them communicate. All that is
-  required for the signaller to operate is a suitable messenger.
-
-  A messenger is a simple object that implements node
-  [EventEmitter](http://nodejs.org/api/events.html) style `on` events for
-  `open`, `close`, `message` events, and also a `send` method by which
-  data will be send "over-the-wire".
-
-  By using this approach, we can conduct signalling over any number of
-  mechanisms:
-
-  - local, in memory message passing
-  - via WebSockets and higher level abstractions (such as
-    [primus](https://github.com/primus/primus))
-  - also over WebRTC data-channels (very meta, and admittedly a little
-    complicated).
-
-  ## Getting Started
-
-  While the signaller is capable of communicating by a number of different
-  messengers (i.e. anything that can send and receive messages over a wire)
-  it comes with support for understanding how to connect to an
-  [rtc-switchboard](https://github.com/rtc-io/rtc-switchboard) out of the box.
-
-  The following code sample demonstrates how:
-
-  <<< examples/getting-started.js
-
-  ## Signal Flow Diagrams
-
-  Displayed below are some diagrams how the signalling flow between peers
-  behaves.  In each of the diagrams we illustrate three peers (A, B and C)
-  participating discovery and coordinating RTCPeerConnection handshakes.
-
-  In each case, only the interaction between the clients is represented not
-  how a signalling server
-  (such as [rtc-switchboard](https://github.com/rtc-io/rtc-switchboard)) would
-  pass on broadcast messages, etc.  This is done for two reasons:
-
-  1. It is out of scope of this documentation.
-  2. The `rtc-signaller` has been designed to work without having to rely on
-     any intelligence in the server side signalling component.  In the
-     instance that a signaller broadcasts all messages to all connected peers
-     then `rtc-signaller` should be smart enough to make sure everything works
-     as expected.
-
-  ### Peer Discovery / Announcement
-
-  This diagram illustrates the process of how peer `A` announces itself to
-  peers `B` and `C`, and in turn they announce themselves.
-
-  ![](https://raw.github.com/rtc-io/rtc-signaller/master/docs/announce.png)
-
-  ### Editing / Updating the Diagrams
-
-  Each of the diagrams has been generated using
-  [mscgen](http://www.mcternan.me.uk/mscgen/index.html) and the source for
-  these documents can be found in the `docs/` folder of this repository.
-
-  ## Reference
-
-  The `rtc-signaller` module is designed to be used primarily in a functional
-  way and when called it creates a new signaller that will enable
-  you to communicate with other peers via your messaging network.
-
-  ```js
-  // create a signaller from something that knows how to send messages
-  var signaller = require('rtc-signaller')(messenger);
-  ```
-
-  As demonstrated in the getting started guide, you can also pass through
-  a string value instead of a messenger instance if you simply want to
-  connect to an existing `rtc-switchboard` instance.
-
-**/
-var sig = module.exports = function(messenger, opts) {
-
-  // get the autoreply setting
-  var autoreply = (opts || {}).autoreply;
-
-  // create the signaller
-  var signaller = new EventEmitter();
-
-  // initialise the id
-  var id = signaller.id = (opts || {}).id || uuid.v4();
-
-  // initialise the attributes
-  var attributes = signaller.attributes = {
-    browser: detect.browser,
-    browserVersion: detect.browserVersion,
-    id: id,
-    agent: 'signaller@' + metadata.version
-  };
-
-  // create the peers map
-  var peers = signaller.peers = new FastMap();
-
-  // initialise the data event name
-  var dataEvent = (opts || {}).dataEvent || 'data';
-  var openEvent = (opts || {}).openEvent || 'open';
-  var writeMethod = (opts || {}).writeMethod || 'write';
-  var closeMethod = (opts || {}).closeMethod || 'close';
-  var initialized = false;
-  var write;
-  var close;
-  var processor;
-
-  function connectToPrimus(url) {
-    // load primus
-    sig.loadPrimus(url, function(err, Primus) {
-      if (err) {
-        return signaller.emit('error', err);
-      }
-
-      // create the actual messenger from a primus connection
-      messenger = Primus.connect(url);
-
-      // now init
-      init();
-    });
-  }
-
-  function init() {
-    // extract the write and close function references
-    write = messenger[writeMethod];
-    close = messenger[closeMethod];
-
-    // create the processor
-    processor = require('./processor')(signaller);
-
-    // if the messenger doesn't provide a valid write method, then complain
-    if (typeof write != 'function') {
-      throw new Error('provided messenger does not implement a "' +
-        writeMethod + '" write method');
-    }
-
-    // handle message data events
-    messenger.on(dataEvent, processor);
-
-    // when the connection is open, then emit an open event and a connected event
-    messenger.on(openEvent, function() {
-      // TODO: deprecate the open event
-      signaller.emit('open');
-      signaller.emit('connected');
-    });
-
-    // flag as initialised
-    initialized = true;
-    signaller.emit('init');
-  }
-
-  // set the autoreply flag
-  signaller.autoreply = autoreply === undefined || autoreply;
-
-  function prepareArg(arg) {
-    if (typeof arg == 'object' && (! (arg instanceof String))) {
-      return JSON.stringify(arg);
-    }
-    else if (typeof arg == 'function') {
-      return null;
-    }
-
-    return arg;
-  }
-
-  /**
-    ### signaller#send(message, data*)
-
-    Use the send function to send a message to other peers in the current
-    signalling scope (if announced in a room this will be a room, otherwise
-    broadcast to all peers connected to the signalling server).
-
-  **/
-  var send = signaller.send = function() {
-    // iterate over the arguments and stringify as required
-    // var metadata = { id: signaller.id };
-    var args = [].slice.call(arguments);
-    var dataline;
-
-    // inject the metadata
-    args.splice(1, 0, { id: signaller.id });
-    dataline = args.map(prepareArg).filter(Boolean).join('|');
-
-    // if we are not initialized, then wait until we are
-    if (! initialized) {
-      return signaller.once('init', function() {
-        write.call(messenger, dataline);
-      });
-    }
-
-    // send the data over the messenger
-    return write.call(messenger, dataline);
-  };
-
-  /**
-    ### announce(data?)
-
-    The `announce` function of the signaller will pass an `/announce` message
-    through the messenger network.  When no additional data is supplied to
-    this function then only the id of the signaller is sent to all active
-    members of the messenging network.
-
-    #### Joining Rooms
-
-    To join a room using an announce call you simply provide the name of the
-    room you wish to join as part of the data block that you annouce, for
-    example:
-
-    ```js
-    signaller.announce({ room: 'testroom' });
-    ```
-
-    Signalling servers (such as
-    [rtc-switchboard](https://github.com/rtc-io/rtc-switchboard)) will then
-    place your peer connection into a room with other peers that have also
-    announced in this room.
-
-    Once you have joined a room, the server will only deliver messages that
-    you `send` to other peers within that room.
-
-    #### Providing Additional Announce Data
-
-    There may be instances where you wish to send additional data as part of
-    your announce message in your application.  For instance, maybe you want
-    to send an alias or nick as part of your announce message rather than just
-    use the signaller's generated id.
-
-    If for instance you were writing a simple chat application you could join
-    the `webrtc` room and tell everyone your name with the following announce
-    call:
-
-    ```js
-    signaller.announce({
-      room: 'webrtc',
-      nick: 'Damon'
-    });
-    ```
-
-    #### Announcing Updates
-
-    The signaller is written to distinguish between initial peer announcements
-    and peer data updates (see the docs on the announce handler below). As
-    such it is ok to provide any data updates using the announce method also.
-
-    For instance, I could send a status update as an announce message to flag
-    that I am going offline:
-
-    ```js
-    signaller.announce({ status: 'offline' });
-    ```
-
-  **/
-  signaller.announce = function(data, sender) {
-    // update internal attributes
-    extend(attributes, data, { id: signaller.id });
-
-    // send the attributes over the network
-    return (sender || send)('/announce', attributes);
-  };
-
-  /**
-    ### isMaster(targetId)
-
-    A simple function that indicates whether the local signaller is the master
-    for it's relationship with peer signaller indicated by `targetId`.  Roles
-    are determined at the point at which signalling peers discover each other,
-    and are simply worked out by whichever peer has the lowest signaller id
-    when lexigraphically sorted.
-
-    For example, if we have two signaller peers that have discovered each
-    others with the following ids:
-
-    - `b11f4fd0-feb5-447c-80c8-c51d8c3cced2`
-    - `8a07f82e-49a5-4b9b-a02e-43d911382be6`
-
-    They would be assigned roles:
-
-    - `b11f4fd0-feb5-447c-80c8-c51d8c3cced2`
-    - `8a07f82e-49a5-4b9b-a02e-43d911382be6` (master)
-
-  **/
-  signaller.isMaster = function(targetId) {
-    var peer = peers.get(targetId);
-
-    return peer && peer.roleIdx !== 0;
-  };
-
-  /**
-    ### leave()
-
-    Tell the signalling server we are leaving.  Calling this function is
-    usually not required though as the signalling server should issue correct
-    `/leave` messages when it detects a disconnect event.
-
-  **/
-  signaller.leave = function() {
-    // send the leave signal
-    send('/leave', { id: id });
-
-    // call the close method
-    if (typeof close == 'function') {
-      close.call(messenger);
-    }
-  };
-
-  /**
-    ### to(targetId)
-
-    Use the `to` function to send a message to the specified target peer.
-    A large parge of negotiating a WebRTC peer connection involves direct
-    communication between two parties which must be done by the signalling
-    server.  The `to` function provides a simple way to provide a logical
-    communication channel between the two parties:
-
-    ```js
-    var send = signaller.to('e95fa05b-9062-45c6-bfa2-5055bf6625f4').send;
-
-    // create an offer on a local peer connection
-    pc.createOffer(
-      function(desc) {
-        // set the local description using the offer sdp
-        // if this occurs successfully send this to our peer
-        pc.setLocalDescription(
-          desc,
-          function() {
-            send('/sdp', desc);
-          },
-          handleFail
-        );
-      },
-      handleFail
-    );
-    ```
-
-  **/
-  signaller.to = function(targetId) {
-    // create a sender that will prepend messages with /to|targetId|
-    var sender = function() {
-      // get the peer (yes when send is called to make sure it hasn't left)
-      var peer = signaller.peers.get(targetId);
-      var args;
-
-      if (! peer) {
-        throw new Error('Unknown peer: ' + targetId);
-      }
-
-      // if the peer is inactive, then abort
-      if (peer.inactive) {
-        return;
-      }
-
-      args = [
-        '/to',
-        targetId
-      ].concat([].slice.call(arguments));
-
-      // inject metadata
-      args.splice(3, 0, { id: signaller.id });
-
-      setTimeout(function() {
-        var msg = args.map(prepareArg).filter(Boolean).join('|');
-        debug('TX (' + targetId + '): ' + msg);
-
-        write.call(messenger, msg);
-      }, 0);
-    };
-
-    return {
-      announce: function(data) {
-        return signaller.announce(data, sender);
-      },
-
-      send: sender,
-    }
-  };
-
-  // if the messenger is a string, then we are going to attach to a
-  // ws endpoint and automatically set up primus
-  if (typeof messenger == 'string' || (messenger instanceof String)) {
-    connectToPrimus(messenger);
-  }
-  // otherwise, initialise the connection
-  else {
-    init();
-  }
-
-  return signaller;
-};
-
-sig.loadPrimus = require('./primus-loader');
-},{"./primus-loader":63,"./processor":64,"cog/extend":24,"cog/logger":26,"collections/fast-map":46,"events":4,"rtc-core/detect":40,"uuid":72}],45:[function(require,module,exports){
+}).call(this,require("/home/doehlman/code/rtc.io/demo-mesh/node_modules/browserify/node_modules/insert-module-globals/node_modules/process/browser.js"))
+},{"/home/doehlman/code/rtc.io/demo-mesh/node_modules/browserify/node_modules/insert-module-globals/node_modules/process/browser.js":7,"cog/defaults":23,"cog/extend":24,"collections/fast-map":42,"events":5,"rtc":72,"rtc-signaller":65,"rtc/cleanup":68}],41:[function(require,module,exports){
 "use strict";
 
 var Shim = require("./shim");
@@ -8669,7 +8521,7 @@ Dict.prototype.one = function () {
 };
 
 
-},{"./generic-collection":48,"./generic-map":49,"./listen/property-changes":54,"./shim":61}],46:[function(require,module,exports){
+},{"./generic-collection":44,"./generic-map":45,"./listen/property-changes":50,"./shim":57}],42:[function(require,module,exports){
 "use strict";
 
 var Shim = require("./shim");
@@ -8728,7 +8580,7 @@ FastMap.prototype.stringify = function (item, leader) {
 }
 
 
-},{"./fast-set":47,"./generic-collection":48,"./generic-map":49,"./listen/property-changes":54,"./shim":61}],47:[function(require,module,exports){
+},{"./fast-set":43,"./generic-collection":44,"./generic-map":45,"./listen/property-changes":50,"./shim":57}],43:[function(require,module,exports){
 "use strict";
 
 var Shim = require("./shim");
@@ -8919,7 +8771,7 @@ FastSet.prototype.logNode = function (node, write) {
 };
 
 
-},{"./dict":45,"./generic-collection":48,"./generic-set":51,"./list":52,"./listen/property-changes":54,"./shim":61,"./tree-log":62}],48:[function(require,module,exports){
+},{"./dict":41,"./generic-collection":44,"./generic-set":47,"./list":48,"./listen/property-changes":50,"./shim":57,"./tree-log":58}],44:[function(require,module,exports){
 "use strict";
 
 module.exports = GenericCollection;
@@ -9182,7 +9034,7 @@ GenericCollection.prototype.iterator = function () {
 require("./shim-array");
 
 
-},{"./shim-array":57}],49:[function(require,module,exports){
+},{"./shim-array":53}],45:[function(require,module,exports){
 "use strict";
 
 var Object = require("./shim-object");
@@ -9370,7 +9222,7 @@ Item.prototype.compare = function (that) {
 };
 
 
-},{"./listen/map-changes":53,"./listen/property-changes":54,"./shim-object":59}],50:[function(require,module,exports){
+},{"./listen/map-changes":49,"./listen/property-changes":50,"./shim-object":55}],46:[function(require,module,exports){
 
 var Object = require("./shim-object");
 
@@ -9427,7 +9279,7 @@ GenericOrder.prototype.compare = function (that, compare) {
 };
 
 
-},{"./shim-object":59}],51:[function(require,module,exports){
+},{"./shim-object":55}],47:[function(require,module,exports){
 
 module.exports = GenericSet;
 function GenericSet() {
@@ -9490,7 +9342,7 @@ GenericSet.prototype.toggle = function (value) {
 };
 
 
-},{}],52:[function(require,module,exports){
+},{}],48:[function(require,module,exports){
 "use strict";
 
 module.exports = List;
@@ -9935,7 +9787,7 @@ Node.prototype.addAfter = function (node) {
 };
 
 
-},{"./generic-collection":48,"./generic-order":50,"./listen/property-changes":54,"./listen/range-changes":55,"./shim":61}],53:[function(require,module,exports){
+},{"./generic-collection":44,"./generic-order":46,"./listen/property-changes":50,"./listen/range-changes":51,"./shim":57}],49:[function(require,module,exports){
 "use strict";
 
 var WeakMap = require("weak-map");
@@ -10084,7 +9936,7 @@ MapChanges.prototype.dispatchBeforeMapChange = function (key, value) {
 };
 
 
-},{"../dict":45,"../list":52,"weak-map":56}],54:[function(require,module,exports){
+},{"../dict":41,"../list":48,"weak-map":52}],50:[function(require,module,exports){
 /*
     Based in part on observable arrays from Motorola Mobility’s Montage
     Copyright (c) 2012, Motorola Mobility LLC. All Rights Reserved.
@@ -10533,7 +10385,7 @@ PropertyChanges.makePropertyUnobservable = function (object, key) {
 };
 
 
-},{"../shim":61,"weak-map":56}],55:[function(require,module,exports){
+},{"../shim":57,"weak-map":52}],51:[function(require,module,exports){
 "use strict";
 
 var WeakMap = require("weak-map");
@@ -10677,7 +10529,7 @@ RangeChanges.prototype.dispatchBeforeRangeChange = function (plus, minus, index)
 };
 
 
-},{"../dict":45,"weak-map":56}],56:[function(require,module,exports){
+},{"../dict":41,"weak-map":52}],52:[function(require,module,exports){
 // Copyright (C) 2011 Google Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -11269,7 +11121,7 @@ RangeChanges.prototype.dispatchBeforeRangeChange = function (plus, minus, index)
   }
 })();
 
-},{}],57:[function(require,module,exports){
+},{}],53:[function(require,module,exports){
 "use strict";
 
 /*
@@ -11605,7 +11457,7 @@ ArrayIterator.prototype.next = function () {
 };
 
 
-},{"./generic-collection":48,"./generic-order":50,"./shim-function":58,"weak-map":56}],58:[function(require,module,exports){
+},{"./generic-collection":44,"./generic-order":46,"./shim-function":54,"weak-map":52}],54:[function(require,module,exports){
 
 module.exports = Function;
 
@@ -11666,7 +11518,7 @@ Function.get = function (key) {
 };
 
 
-},{}],59:[function(require,module,exports){
+},{}],55:[function(require,module,exports){
 "use strict";
 
 var WeakMap = require("weak-map");
@@ -12006,21 +11858,42 @@ Object.is = function (x, y) {
     @returns {Boolean} whether the values are deeply equivalent
     @function external:Object.equals
 */
-Object.equals = function (a, b, equals) {
+Object.equals = function (a, b, equals, memo) {
     equals = equals || Object.equals;
     // unbox objects, but do not confuse object literals
     a = Object.getValueOf(a);
     b = Object.getValueOf(b);
     if (a === b)
-        // 0 === -0, but they are not equal
-        return a !== 0 || 1 / a === 1 / b;
-    if (a == null || b == null)
-        return a === b;
-    if (typeof a.equals === "function")
-        return a.equals(b, equals);
+        return true;
+    if (Object.isObject(a)) {
+        memo = memo || new WeakMap();
+        if (memo.has(a)) {
+            return true;
+        }
+        memo.set(a, true);
+    }
+    if (Object.isObject(a) && typeof a.equals === "function") {
+        return a.equals(b, equals, memo);
+    }
     // commutative
-    if (typeof b.equals === "function")
-        return b.equals(a, equals);
+    if (Object.isObject(b) && typeof b.equals === "function") {
+        return b.equals(a, equals, memo);
+    }
+    if (Object.isObject(a) && Object.isObject(b)) {
+        if (Object.getPrototypeOf(a) === Object.prototype && Object.getPrototypeOf(b) === Object.prototype) {
+            for (var name in a) {
+                if (!equals(a[name], b[name], equals, memo)) {
+                    return false;
+                }
+            }
+            for (var name in b) {
+                if (!(name in a) || !equals(b[name], a[name], equals, memo)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+    }
     // NaN !== NaN, but they are equal.
     // NaNs are the only non-reflexive value, i.e., if x !== x,
     // then x is a NaN.
@@ -12030,21 +11903,8 @@ Object.equals = function (a, b, equals) {
     // both NaN.
     if (a !== a && b !== b)
         return true;
-    if (typeof a !== "object" || typeof b !== "object")
+    if (!a || !b)
         return a === b;
-    if (Object.getPrototypeOf(a) === Object.prototype && Object.getPrototypeOf(b) === Object.prototype) {
-        for (var name in a) {
-            if (!equals(a[name], b[name])) {
-                return false;
-            }
-        }
-        for (var name in b) {
-            if (!(name in a)) {
-                return false;
-            }
-        }
-        return true;
-    }
     return false;
 };
 
@@ -12093,19 +11953,15 @@ Object.compare = function (a, b) {
         return 0;
     var aType = typeof a;
     var bType = typeof b;
-    if (aType !== bType)
-        return 0;
-    if (a == null)
-        return b == null ? 0 : -1;
-    if (aType === "number")
+    if (aType === "number" && bType === "number")
         return a - b;
-    if (aType === "string")
-        return a < b ? -1 : 1;
+    if (aType === "string" && bType === "string")
+        return a < b ? -Infinity : Infinity;
         // the possibility of equality elimiated above
-    if (typeof a.compare === "function")
+    if (a && typeof a.compare === "function")
         return a.compare(b);
     // not commutative, the relationship is reversed
-    if (typeof b.compare === "function")
+    if (b && typeof b.compare === "function")
         return -b.compare(a);
     return 0;
 };
@@ -12179,7 +12035,7 @@ Object.clear = function (object) {
 };
 
 
-},{"weak-map":56}],60:[function(require,module,exports){
+},{"weak-map":52}],56:[function(require,module,exports){
 
 /**
     accepts a string; returns the string with regex metacharacters escaped.
@@ -12195,7 +12051,7 @@ if (!RegExp.escape) {
 }
 
 
-},{}],61:[function(require,module,exports){
+},{}],57:[function(require,module,exports){
 
 var Array = require("./shim-array");
 var Object = require("./shim-object");
@@ -12203,7 +12059,7 @@ var Function = require("./shim-function");
 var RegExp = require("./shim-regexp");
 
 
-},{"./shim-array":57,"./shim-function":58,"./shim-object":59,"./shim-regexp":60}],62:[function(require,module,exports){
+},{"./shim-array":53,"./shim-function":54,"./shim-object":55,"./shim-regexp":56}],58:[function(require,module,exports){
 "use strict";
 
 module.exports = TreeLog;
@@ -12245,7 +12101,1946 @@ TreeLog.unicodeSharp = {
 };
 
 
-},{}],63:[function(require,module,exports){
+},{}],59:[function(require,module,exports){
+(function (process){
+/* jshint node: true */
+/* global window: false */
+/* global navigator: false */
+
+'use strict';
+
+var semver = require('semver');
+var browsers = {
+  chrome: /Chrom(?:e|ium)\/([0-9\.]+)(:?\s|$)/,
+  firefox: /Firefox\/([0-9\.]+)(?:\s|$)/,
+  opera: /Opera\/([0-9\.]+)(?:\s|$)/
+};
+
+/**
+  ## rtc-core/detect
+
+  A browser detection helper for accessing prefix-free versions of the various
+  WebRTC types.
+
+  ### Example Usage
+
+  If you wanted to get the native `RTCPeerConnection` prototype in any browser
+  you could do the following:
+
+  ```js
+  var detect = require('rtc-core/detect'); // also available in rtc/detect
+  var RTCPeerConnection = detect('RTCPeerConnection');
+  ```
+
+  This would provide whatever the browser prefixed version of the
+  RTCPeerConnection is available (`webkitRTCPeerConnection`,
+  `mozRTCPeerConnection`, etc).
+**/
+var detect = module.exports = function(target, prefixes) {
+  var prefixIdx;
+  var prefix;
+  var testName;
+  var hostObject = this || (typeof window != 'undefined' ? window : undefined);
+
+  // if we have no host object, then abort
+  if (! hostObject) {
+    return;
+  }
+
+  // initialise to default prefixes
+  // (reverse order as we use a decrementing for loop)
+  prefixes = (prefixes || ['ms', 'o', 'moz', 'webkit']).concat('');
+
+  // iterate through the prefixes and return the class if found in global
+  for (prefixIdx = prefixes.length; prefixIdx--; ) {
+    prefix = prefixes[prefixIdx];
+
+    // construct the test class name
+    // if we have a prefix ensure the target has an uppercase first character
+    // such that a test for getUserMedia would result in a
+    // search for webkitGetUserMedia
+    testName = prefix + (prefix ?
+                            target.charAt(0).toUpperCase() + target.slice(1) :
+                            target);
+
+    if (typeof hostObject[testName] != 'undefined') {
+      // update the last used prefix
+      detect.browser = detect.browser || prefix.toLowerCase();
+
+      // return the host object member
+      return hostObject[target] = hostObject[testName];
+    }
+  }
+};
+
+// detect mozilla (yes, this feels dirty)
+detect.moz = typeof navigator != 'undefined' && !!navigator.mozGetUserMedia;
+
+// time to do some useragent sniffing - it feels dirty because it is :/
+if (typeof navigator != 'undefined') {
+  Object.keys(browsers).forEach(function(key) {
+    var match = browsers[key].exec(navigator.userAgent);
+    if (match) {
+      detect.browser = key;
+      detect.browserVersion = detect.version = parseVersion(match[1]);
+    }
+  });
+}
+else {
+  detect.browser = 'node';
+  detect.browserVersion = detect.version = parseVersion(process.version.substr(1));
+}
+
+function parseVersion(version) {
+  // get the version parts
+  var versionParts = version.split('.').slice(0, 3);
+
+  // while we don't have enough parts for the semver spec, add more zeros
+  while (versionParts.length < 3) {
+    versionParts.push('0');
+  }
+
+  // return the version cleaned version (hopefully)
+  // falling back to the provided version if required
+  return semver.clean(versionParts.join('.')) || version;
+}
+}).call(this,require("/home/doehlman/code/rtc.io/demo-mesh/node_modules/browserify/node_modules/insert-module-globals/node_modules/process/browser.js"))
+},{"/home/doehlman/code/rtc.io/demo-mesh/node_modules/browserify/node_modules/insert-module-globals/node_modules/process/browser.js":7,"semver":60}],60:[function(require,module,exports){
+;(function(exports) {
+
+// export the class if we are in a Node-like system.
+if (typeof module === 'object' && module.exports === exports)
+  exports = module.exports = SemVer;
+
+// The debug function is excluded entirely from the minified version.
+
+// Note: this is the semver.org version of the spec that it implements
+// Not necessarily the package version of this code.
+exports.SEMVER_SPEC_VERSION = '2.0.0';
+
+// The actual regexps go on exports.re
+var re = exports.re = [];
+var src = exports.src = [];
+var R = 0;
+
+// The following Regular Expressions can be used for tokenizing,
+// validating, and parsing SemVer version strings.
+
+// ## Numeric Identifier
+// A single `0`, or a non-zero digit followed by zero or more digits.
+
+var NUMERICIDENTIFIER = R++;
+src[NUMERICIDENTIFIER] = '0|[1-9]\\d*';
+var NUMERICIDENTIFIERLOOSE = R++;
+src[NUMERICIDENTIFIERLOOSE] = '[0-9]+';
+
+
+// ## Non-numeric Identifier
+// Zero or more digits, followed by a letter or hyphen, and then zero or
+// more letters, digits, or hyphens.
+
+var NONNUMERICIDENTIFIER = R++;
+src[NONNUMERICIDENTIFIER] = '\\d*[a-zA-Z-][a-zA-Z0-9-]*';
+
+
+// ## Main Version
+// Three dot-separated numeric identifiers.
+
+var MAINVERSION = R++;
+src[MAINVERSION] = '(' + src[NUMERICIDENTIFIER] + ')\\.' +
+                   '(' + src[NUMERICIDENTIFIER] + ')\\.' +
+                   '(' + src[NUMERICIDENTIFIER] + ')';
+
+var MAINVERSIONLOOSE = R++;
+src[MAINVERSIONLOOSE] = '(' + src[NUMERICIDENTIFIERLOOSE] + ')\\.' +
+                        '(' + src[NUMERICIDENTIFIERLOOSE] + ')\\.' +
+                        '(' + src[NUMERICIDENTIFIERLOOSE] + ')';
+
+// ## Pre-release Version Identifier
+// A numeric identifier, or a non-numeric identifier.
+
+var PRERELEASEIDENTIFIER = R++;
+src[PRERELEASEIDENTIFIER] = '(?:' + src[NUMERICIDENTIFIER] +
+                            '|' + src[NONNUMERICIDENTIFIER] + ')';
+
+var PRERELEASEIDENTIFIERLOOSE = R++;
+src[PRERELEASEIDENTIFIERLOOSE] = '(?:' + src[NUMERICIDENTIFIERLOOSE] +
+                                 '|' + src[NONNUMERICIDENTIFIER] + ')';
+
+
+// ## Pre-release Version
+// Hyphen, followed by one or more dot-separated pre-release version
+// identifiers.
+
+var PRERELEASE = R++;
+src[PRERELEASE] = '(?:-(' + src[PRERELEASEIDENTIFIER] +
+                  '(?:\\.' + src[PRERELEASEIDENTIFIER] + ')*))';
+
+var PRERELEASELOOSE = R++;
+src[PRERELEASELOOSE] = '(?:-?(' + src[PRERELEASEIDENTIFIERLOOSE] +
+                       '(?:\\.' + src[PRERELEASEIDENTIFIERLOOSE] + ')*))';
+
+// ## Build Metadata Identifier
+// Any combination of digits, letters, or hyphens.
+
+var BUILDIDENTIFIER = R++;
+src[BUILDIDENTIFIER] = '[0-9A-Za-z-]+';
+
+// ## Build Metadata
+// Plus sign, followed by one or more period-separated build metadata
+// identifiers.
+
+var BUILD = R++;
+src[BUILD] = '(?:\\+(' + src[BUILDIDENTIFIER] +
+             '(?:\\.' + src[BUILDIDENTIFIER] + ')*))';
+
+
+// ## Full Version String
+// A main version, followed optionally by a pre-release version and
+// build metadata.
+
+// Note that the only major, minor, patch, and pre-release sections of
+// the version string are capturing groups.  The build metadata is not a
+// capturing group, because it should not ever be used in version
+// comparison.
+
+var FULL = R++;
+var FULLPLAIN = 'v?' + src[MAINVERSION] +
+                src[PRERELEASE] + '?' +
+                src[BUILD] + '?';
+
+src[FULL] = '^' + FULLPLAIN + '$';
+
+// like full, but allows v1.2.3 and =1.2.3, which people do sometimes.
+// also, 1.0.0alpha1 (prerelease without the hyphen) which is pretty
+// common in the npm registry.
+var LOOSEPLAIN = '[v=\\s]*' + src[MAINVERSIONLOOSE] +
+                 src[PRERELEASELOOSE] + '?' +
+                 src[BUILD] + '?';
+
+var LOOSE = R++;
+src[LOOSE] = '^' + LOOSEPLAIN + '$';
+
+var GTLT = R++;
+src[GTLT] = '((?:<|>)?=?)';
+
+// Something like "2.*" or "1.2.x".
+// Note that "x.x" is a valid xRange identifer, meaning "any version"
+// Only the first item is strictly required.
+var XRANGEIDENTIFIERLOOSE = R++;
+src[XRANGEIDENTIFIERLOOSE] = src[NUMERICIDENTIFIERLOOSE] + '|x|X|\\*';
+var XRANGEIDENTIFIER = R++;
+src[XRANGEIDENTIFIER] = src[NUMERICIDENTIFIER] + '|x|X|\\*';
+
+var XRANGEPLAIN = R++;
+src[XRANGEPLAIN] = '[v=\\s]*(' + src[XRANGEIDENTIFIER] + ')' +
+                   '(?:\\.(' + src[XRANGEIDENTIFIER] + ')' +
+                   '(?:\\.(' + src[XRANGEIDENTIFIER] + ')' +
+                   '(?:(' + src[PRERELEASE] + ')' +
+                   ')?)?)?';
+
+var XRANGEPLAINLOOSE = R++;
+src[XRANGEPLAINLOOSE] = '[v=\\s]*(' + src[XRANGEIDENTIFIERLOOSE] + ')' +
+                        '(?:\\.(' + src[XRANGEIDENTIFIERLOOSE] + ')' +
+                        '(?:\\.(' + src[XRANGEIDENTIFIERLOOSE] + ')' +
+                        '(?:(' + src[PRERELEASELOOSE] + ')' +
+                        ')?)?)?';
+
+// >=2.x, for example, means >=2.0.0-0
+// <1.x would be the same as "<1.0.0-0", though.
+var XRANGE = R++;
+src[XRANGE] = '^' + src[GTLT] + '\\s*' + src[XRANGEPLAIN] + '$';
+var XRANGELOOSE = R++;
+src[XRANGELOOSE] = '^' + src[GTLT] + '\\s*' + src[XRANGEPLAINLOOSE] + '$';
+
+// Tilde ranges.
+// Meaning is "reasonably at or greater than"
+var LONETILDE = R++;
+src[LONETILDE] = '(?:~>?)';
+
+var TILDETRIM = R++;
+src[TILDETRIM] = '(\\s*)' + src[LONETILDE] + '\\s+';
+re[TILDETRIM] = new RegExp(src[TILDETRIM], 'g');
+var tildeTrimReplace = '$1~';
+
+var TILDE = R++;
+src[TILDE] = '^' + src[LONETILDE] + src[XRANGEPLAIN] + '$';
+var TILDELOOSE = R++;
+src[TILDELOOSE] = '^' + src[LONETILDE] + src[XRANGEPLAINLOOSE] + '$';
+
+// Caret ranges.
+// Meaning is "at least and backwards compatible with"
+var LONECARET = R++;
+src[LONECARET] = '(?:\\^)';
+
+var CARETTRIM = R++;
+src[CARETTRIM] = '(\\s*)' + src[LONECARET] + '\\s+';
+re[CARETTRIM] = new RegExp(src[CARETTRIM], 'g');
+var caretTrimReplace = '$1^';
+
+var CARET = R++;
+src[CARET] = '^' + src[LONECARET] + src[XRANGEPLAIN] + '$';
+var CARETLOOSE = R++;
+src[CARETLOOSE] = '^' + src[LONECARET] + src[XRANGEPLAINLOOSE] + '$';
+
+// A simple gt/lt/eq thing, or just "" to indicate "any version"
+var COMPARATORLOOSE = R++;
+src[COMPARATORLOOSE] = '^' + src[GTLT] + '\\s*(' + LOOSEPLAIN + ')$|^$';
+var COMPARATOR = R++;
+src[COMPARATOR] = '^' + src[GTLT] + '\\s*(' + FULLPLAIN + ')$|^$';
+
+
+// An expression to strip any whitespace between the gtlt and the thing
+// it modifies, so that `> 1.2.3` ==> `>1.2.3`
+var COMPARATORTRIM = R++;
+src[COMPARATORTRIM] = '(\\s*)' + src[GTLT] +
+                      '\\s*(' + LOOSEPLAIN + '|' + src[XRANGEPLAIN] + ')';
+
+// this one has to use the /g flag
+re[COMPARATORTRIM] = new RegExp(src[COMPARATORTRIM], 'g');
+var comparatorTrimReplace = '$1$2$3';
+
+
+// Something like `1.2.3 - 1.2.4`
+// Note that these all use the loose form, because they'll be
+// checked against either the strict or loose comparator form
+// later.
+var HYPHENRANGE = R++;
+src[HYPHENRANGE] = '^\\s*(' + src[XRANGEPLAIN] + ')' +
+                   '\\s+-\\s+' +
+                   '(' + src[XRANGEPLAIN] + ')' +
+                   '\\s*$';
+
+var HYPHENRANGELOOSE = R++;
+src[HYPHENRANGELOOSE] = '^\\s*(' + src[XRANGEPLAINLOOSE] + ')' +
+                        '\\s+-\\s+' +
+                        '(' + src[XRANGEPLAINLOOSE] + ')' +
+                        '\\s*$';
+
+// Star ranges basically just allow anything at all.
+var STAR = R++;
+src[STAR] = '(<|>)?=?\\s*\\*';
+
+// Compile to actual regexp objects.
+// All are flag-free, unless they were created above with a flag.
+for (var i = 0; i < R; i++) {
+  ;
+  if (!re[i])
+    re[i] = new RegExp(src[i]);
+}
+
+exports.parse = parse;
+function parse(version, loose) {
+  var r = loose ? re[LOOSE] : re[FULL];
+  return (r.test(version)) ? new SemVer(version, loose) : null;
+}
+
+exports.valid = valid;
+function valid(version, loose) {
+  var v = parse(version, loose);
+  return v ? v.version : null;
+}
+
+
+exports.clean = clean;
+function clean(version, loose) {
+  var s = parse(version, loose);
+  return s ? s.version : null;
+}
+
+exports.SemVer = SemVer;
+
+function SemVer(version, loose) {
+  if (version instanceof SemVer) {
+    if (version.loose === loose)
+      return version;
+    else
+      version = version.version;
+  }
+
+  if (!(this instanceof SemVer))
+    return new SemVer(version, loose);
+
+  ;
+  this.loose = loose;
+  var m = version.trim().match(loose ? re[LOOSE] : re[FULL]);
+
+  if (!m)
+    throw new TypeError('Invalid Version: ' + version);
+
+  this.raw = version;
+
+  // these are actually numbers
+  this.major = +m[1];
+  this.minor = +m[2];
+  this.patch = +m[3];
+
+  // numberify any prerelease numeric ids
+  if (!m[4])
+    this.prerelease = [];
+  else
+    this.prerelease = m[4].split('.').map(function(id) {
+      return (/^[0-9]+$/.test(id)) ? +id : id;
+    });
+
+  this.build = m[5] ? m[5].split('.') : [];
+  this.format();
+}
+
+SemVer.prototype.format = function() {
+  this.version = this.major + '.' + this.minor + '.' + this.patch;
+  if (this.prerelease.length)
+    this.version += '-' + this.prerelease.join('.');
+  return this.version;
+};
+
+SemVer.prototype.inspect = function() {
+  return '<SemVer "' + this + '">';
+};
+
+SemVer.prototype.toString = function() {
+  return this.version;
+};
+
+SemVer.prototype.compare = function(other) {
+  ;
+  if (!(other instanceof SemVer))
+    other = new SemVer(other, this.loose);
+
+  return this.compareMain(other) || this.comparePre(other);
+};
+
+SemVer.prototype.compareMain = function(other) {
+  if (!(other instanceof SemVer))
+    other = new SemVer(other, this.loose);
+
+  return compareIdentifiers(this.major, other.major) ||
+         compareIdentifiers(this.minor, other.minor) ||
+         compareIdentifiers(this.patch, other.patch);
+};
+
+SemVer.prototype.comparePre = function(other) {
+  if (!(other instanceof SemVer))
+    other = new SemVer(other, this.loose);
+
+  // NOT having a prerelease is > having one
+  if (this.prerelease.length && !other.prerelease.length)
+    return -1;
+  else if (!this.prerelease.length && other.prerelease.length)
+    return 1;
+  else if (!this.prerelease.lenth && !other.prerelease.length)
+    return 0;
+
+  var i = 0;
+  do {
+    var a = this.prerelease[i];
+    var b = other.prerelease[i];
+    ;
+    if (a === undefined && b === undefined)
+      return 0;
+    else if (b === undefined)
+      return 1;
+    else if (a === undefined)
+      return -1;
+    else if (a === b)
+      continue;
+    else
+      return compareIdentifiers(a, b);
+  } while (++i);
+};
+
+SemVer.prototype.inc = function(release) {
+  switch (release) {
+    case 'major':
+      this.major++;
+      this.minor = -1;
+    case 'minor':
+      this.minor++;
+      this.patch = -1;
+    case 'patch':
+      this.patch++;
+      this.prerelease = [];
+      break;
+    case 'prerelease':
+      if (this.prerelease.length === 0)
+        this.prerelease = [0];
+      else {
+        var i = this.prerelease.length;
+        while (--i >= 0) {
+          if (typeof this.prerelease[i] === 'number') {
+            this.prerelease[i]++;
+            i = -2;
+          }
+        }
+        if (i === -1) // didn't increment anything
+          this.prerelease.push(0);
+      }
+      break;
+
+    default:
+      throw new Error('invalid increment argument: ' + release);
+  }
+  this.format();
+  return this;
+};
+
+exports.inc = inc;
+function inc(version, release, loose) {
+  try {
+    return new SemVer(version, loose).inc(release).version;
+  } catch (er) {
+    return null;
+  }
+}
+
+exports.compareIdentifiers = compareIdentifiers;
+
+var numeric = /^[0-9]+$/;
+function compareIdentifiers(a, b) {
+  var anum = numeric.test(a);
+  var bnum = numeric.test(b);
+
+  if (anum && bnum) {
+    a = +a;
+    b = +b;
+  }
+
+  return (anum && !bnum) ? -1 :
+         (bnum && !anum) ? 1 :
+         a < b ? -1 :
+         a > b ? 1 :
+         0;
+}
+
+exports.rcompareIdentifiers = rcompareIdentifiers;
+function rcompareIdentifiers(a, b) {
+  return compareIdentifiers(b, a);
+}
+
+exports.compare = compare;
+function compare(a, b, loose) {
+  return new SemVer(a, loose).compare(b);
+}
+
+exports.compareLoose = compareLoose;
+function compareLoose(a, b) {
+  return compare(a, b, true);
+}
+
+exports.rcompare = rcompare;
+function rcompare(a, b, loose) {
+  return compare(b, a, loose);
+}
+
+exports.sort = sort;
+function sort(list, loose) {
+  return list.sort(function(a, b) {
+    return exports.compare(a, b, loose);
+  });
+}
+
+exports.rsort = rsort;
+function rsort(list, loose) {
+  return list.sort(function(a, b) {
+    return exports.rcompare(a, b, loose);
+  });
+}
+
+exports.gt = gt;
+function gt(a, b, loose) {
+  return compare(a, b, loose) > 0;
+}
+
+exports.lt = lt;
+function lt(a, b, loose) {
+  return compare(a, b, loose) < 0;
+}
+
+exports.eq = eq;
+function eq(a, b, loose) {
+  return compare(a, b, loose) === 0;
+}
+
+exports.neq = neq;
+function neq(a, b, loose) {
+  return compare(a, b, loose) !== 0;
+}
+
+exports.gte = gte;
+function gte(a, b, loose) {
+  return compare(a, b, loose) >= 0;
+}
+
+exports.lte = lte;
+function lte(a, b, loose) {
+  return compare(a, b, loose) <= 0;
+}
+
+exports.cmp = cmp;
+function cmp(a, op, b, loose) {
+  var ret;
+  switch (op) {
+    case '===': ret = a === b; break;
+    case '!==': ret = a !== b; break;
+    case '': case '=': case '==': ret = eq(a, b, loose); break;
+    case '!=': ret = neq(a, b, loose); break;
+    case '>': ret = gt(a, b, loose); break;
+    case '>=': ret = gte(a, b, loose); break;
+    case '<': ret = lt(a, b, loose); break;
+    case '<=': ret = lte(a, b, loose); break;
+    default: throw new TypeError('Invalid operator: ' + op);
+  }
+  return ret;
+}
+
+exports.Comparator = Comparator;
+function Comparator(comp, loose) {
+  if (comp instanceof Comparator) {
+    if (comp.loose === loose)
+      return comp;
+    else
+      comp = comp.value;
+  }
+
+  if (!(this instanceof Comparator))
+    return new Comparator(comp, loose);
+
+  ;
+  this.loose = loose;
+  this.parse(comp);
+
+  if (this.semver === ANY)
+    this.value = '';
+  else
+    this.value = this.operator + this.semver.version;
+}
+
+var ANY = {};
+Comparator.prototype.parse = function(comp) {
+  var r = this.loose ? re[COMPARATORLOOSE] : re[COMPARATOR];
+  var m = comp.match(r);
+
+  if (!m)
+    throw new TypeError('Invalid comparator: ' + comp);
+
+  this.operator = m[1];
+  // if it literally is just '>' or '' then allow anything.
+  if (!m[2])
+    this.semver = ANY;
+  else {
+    this.semver = new SemVer(m[2], this.loose);
+
+    // <1.2.3-rc DOES allow 1.2.3-beta (has prerelease)
+    // >=1.2.3 DOES NOT allow 1.2.3-beta
+    // <=1.2.3 DOES allow 1.2.3-beta
+    // However, <1.2.3 does NOT allow 1.2.3-beta,
+    // even though `1.2.3-beta < 1.2.3`
+    // The assumption is that the 1.2.3 version has something you
+    // *don't* want, so we push the prerelease down to the minimum.
+    if (this.operator === '<' && !this.semver.prerelease.length) {
+      this.semver.prerelease = ['0'];
+      this.semver.format();
+    }
+  }
+};
+
+Comparator.prototype.inspect = function() {
+  return '<SemVer Comparator "' + this + '">';
+};
+
+Comparator.prototype.toString = function() {
+  return this.value;
+};
+
+Comparator.prototype.test = function(version) {
+  ;
+  return (this.semver === ANY) ? true :
+         cmp(version, this.operator, this.semver, this.loose);
+};
+
+
+exports.Range = Range;
+function Range(range, loose) {
+  if ((range instanceof Range) && range.loose === loose)
+    return range;
+
+  if (!(this instanceof Range))
+    return new Range(range, loose);
+
+  this.loose = loose;
+
+  // First, split based on boolean or ||
+  this.raw = range;
+  this.set = range.split(/\s*\|\|\s*/).map(function(range) {
+    return this.parseRange(range.trim());
+  }, this).filter(function(c) {
+    // throw out any that are not relevant for whatever reason
+    return c.length;
+  });
+
+  if (!this.set.length) {
+    throw new TypeError('Invalid SemVer Range: ' + range);
+  }
+
+  this.format();
+}
+
+Range.prototype.inspect = function() {
+  return '<SemVer Range "' + this.range + '">';
+};
+
+Range.prototype.format = function() {
+  this.range = this.set.map(function(comps) {
+    return comps.join(' ').trim();
+  }).join('||').trim();
+  return this.range;
+};
+
+Range.prototype.toString = function() {
+  return this.range;
+};
+
+Range.prototype.parseRange = function(range) {
+  var loose = this.loose;
+  range = range.trim();
+  ;
+  // `1.2.3 - 1.2.4` => `>=1.2.3 <=1.2.4`
+  var hr = loose ? re[HYPHENRANGELOOSE] : re[HYPHENRANGE];
+  range = range.replace(hr, hyphenReplace);
+  ;
+  // `> 1.2.3 < 1.2.5` => `>1.2.3 <1.2.5`
+  range = range.replace(re[COMPARATORTRIM], comparatorTrimReplace);
+  ;
+
+  // `~ 1.2.3` => `~1.2.3`
+  range = range.replace(re[TILDETRIM], tildeTrimReplace);
+
+  // `^ 1.2.3` => `^1.2.3`
+  range = range.replace(re[CARETTRIM], caretTrimReplace);
+
+  // normalize spaces
+  range = range.split(/\s+/).join(' ');
+
+  // At this point, the range is completely trimmed and
+  // ready to be split into comparators.
+
+  var compRe = loose ? re[COMPARATORLOOSE] : re[COMPARATOR];
+  var set = range.split(' ').map(function(comp) {
+    return parseComparator(comp, loose);
+  }).join(' ').split(/\s+/);
+  if (this.loose) {
+    // in loose mode, throw out any that are not valid comparators
+    set = set.filter(function(comp) {
+      return !!comp.match(compRe);
+    });
+  }
+  set = set.map(function(comp) {
+    return new Comparator(comp, loose);
+  });
+
+  return set;
+};
+
+// Mostly just for testing and legacy API reasons
+exports.toComparators = toComparators;
+function toComparators(range, loose) {
+  return new Range(range, loose).set.map(function(comp) {
+    return comp.map(function(c) {
+      return c.value;
+    }).join(' ').trim().split(' ');
+  });
+}
+
+// comprised of xranges, tildes, stars, and gtlt's at this point.
+// already replaced the hyphen ranges
+// turn into a set of JUST comparators.
+function parseComparator(comp, loose) {
+  ;
+  comp = replaceCarets(comp, loose);
+  ;
+  comp = replaceTildes(comp, loose);
+  ;
+  comp = replaceXRanges(comp, loose);
+  ;
+  comp = replaceStars(comp, loose);
+  ;
+  return comp;
+}
+
+function isX(id) {
+  return !id || id.toLowerCase() === 'x' || id === '*';
+}
+
+// ~, ~> --> * (any, kinda silly)
+// ~2, ~2.x, ~2.x.x, ~>2, ~>2.x ~>2.x.x --> >=2.0.0 <3.0.0
+// ~2.0, ~2.0.x, ~>2.0, ~>2.0.x --> >=2.0.0 <2.1.0
+// ~1.2, ~1.2.x, ~>1.2, ~>1.2.x --> >=1.2.0 <1.3.0
+// ~1.2.3, ~>1.2.3 --> >=1.2.3 <1.3.0
+// ~1.2.0, ~>1.2.0 --> >=1.2.0 <1.3.0
+function replaceTildes(comp, loose) {
+  return comp.trim().split(/\s+/).map(function(comp) {
+    return replaceTilde(comp, loose);
+  }).join(' ');
+}
+
+function replaceTilde(comp, loose) {
+  var r = loose ? re[TILDELOOSE] : re[TILDE];
+  return comp.replace(r, function(_, M, m, p, pr) {
+    ;
+    var ret;
+
+    if (isX(M))
+      ret = '';
+    else if (isX(m))
+      ret = '>=' + M + '.0.0-0 <' + (+M + 1) + '.0.0-0';
+    else if (isX(p))
+      // ~1.2 == >=1.2.0- <1.3.0-
+      ret = '>=' + M + '.' + m + '.0-0 <' + M + '.' + (+m + 1) + '.0-0';
+    else if (pr) {
+      ;
+      if (pr.charAt(0) !== '-')
+        pr = '-' + pr;
+      ret = '>=' + M + '.' + m + '.' + p + pr +
+            ' <' + M + '.' + (+m + 1) + '.0-0';
+    } else
+      // ~1.2.3 == >=1.2.3-0 <1.3.0-0
+      ret = '>=' + M + '.' + m + '.' + p + '-0' +
+            ' <' + M + '.' + (+m + 1) + '.0-0';
+
+    ;
+    return ret;
+  });
+}
+
+// ^ --> * (any, kinda silly)
+// ^2, ^2.x, ^2.x.x --> >=2.0.0 <3.0.0
+// ^2.0, ^2.0.x --> >=2.0.0 <3.0.0
+// ^1.2, ^1.2.x --> >=1.2.0 <2.0.0
+// ^1.2.3 --> >=1.2.3 <2.0.0
+// ^1.2.0 --> >=1.2.0 <2.0.0
+function replaceCarets(comp, loose) {
+  return comp.trim().split(/\s+/).map(function(comp) {
+    return replaceCaret(comp, loose);
+  }).join(' ');
+}
+
+function replaceCaret(comp, loose) {
+  var r = loose ? re[CARETLOOSE] : re[CARET];
+  return comp.replace(r, function(_, M, m, p, pr) {
+    ;
+    var ret;
+
+    if (isX(M))
+      ret = '';
+    else if (isX(m))
+      ret = '>=' + M + '.0.0-0 <' + (+M + 1) + '.0.0-0';
+    else if (isX(p)) {
+      if (M === '0')
+        ret = '>=' + M + '.' + m + '.0-0 <' + M + '.' + (+m + 1) + '.0-0';
+      else
+        ret = '>=' + M + '.' + m + '.0-0 <' + (+M + 1) + '.0.0-0';
+    } else if (pr) {
+      ;
+      if (pr.charAt(0) !== '-')
+        pr = '-' + pr;
+      if (M === '0') {
+        if (m === '0')
+          ret = '=' + M + '.' + m + '.' + p + pr;
+        else
+          ret = '>=' + M + '.' + m + '.' + p + pr +
+                ' <' + M + '.' + (+m + 1) + '.0-0';
+      } else
+        ret = '>=' + M + '.' + m + '.' + p + pr +
+              ' <' + (+M + 1) + '.0.0-0';
+    } else {
+      if (M === '0') {
+        if (m === '0')
+          ret = '=' + M + '.' + m + '.' + p;
+        else
+          ret = '>=' + M + '.' + m + '.' + p + '-0' +
+                ' <' + M + '.' + (+m + 1) + '.0-0';
+      } else
+        ret = '>=' + M + '.' + m + '.' + p + '-0' +
+              ' <' + (+M + 1) + '.0.0-0';
+    }
+
+    ;
+    return ret;
+  });
+}
+
+function replaceXRanges(comp, loose) {
+  ;
+  return comp.split(/\s+/).map(function(comp) {
+    return replaceXRange(comp, loose);
+  }).join(' ');
+}
+
+function replaceXRange(comp, loose) {
+  comp = comp.trim();
+  var r = loose ? re[XRANGELOOSE] : re[XRANGE];
+  return comp.replace(r, function(ret, gtlt, M, m, p, pr) {
+    ;
+    var xM = isX(M);
+    var xm = xM || isX(m);
+    var xp = xm || isX(p);
+    var anyX = xp;
+
+    if (gtlt === '=' && anyX)
+      gtlt = '';
+
+    if (gtlt && anyX) {
+      // replace X with 0, and then append the -0 min-prerelease
+      if (xM)
+        M = 0;
+      if (xm)
+        m = 0;
+      if (xp)
+        p = 0;
+
+      if (gtlt === '>') {
+        // >1 => >=2.0.0-0
+        // >1.2 => >=1.3.0-0
+        // >1.2.3 => >= 1.2.4-0
+        gtlt = '>=';
+        if (xM) {
+          // no change
+        } else if (xm) {
+          M = +M + 1;
+          m = 0;
+          p = 0;
+        } else if (xp) {
+          m = +m + 1;
+          p = 0;
+        }
+      }
+
+
+      ret = gtlt + M + '.' + m + '.' + p + '-0';
+    } else if (xM) {
+      // allow any
+      ret = '*';
+    } else if (xm) {
+      // append '-0' onto the version, otherwise
+      // '1.x.x' matches '2.0.0-beta', since the tag
+      // *lowers* the version value
+      ret = '>=' + M + '.0.0-0 <' + (+M + 1) + '.0.0-0';
+    } else if (xp) {
+      ret = '>=' + M + '.' + m + '.0-0 <' + M + '.' + (+m + 1) + '.0-0';
+    }
+
+    ;
+
+    return ret;
+  });
+}
+
+// Because * is AND-ed with everything else in the comparator,
+// and '' means "any version", just remove the *s entirely.
+function replaceStars(comp, loose) {
+  ;
+  // Looseness is ignored here.  star is always as loose as it gets!
+  return comp.trim().replace(re[STAR], '');
+}
+
+// This function is passed to string.replace(re[HYPHENRANGE])
+// M, m, patch, prerelease, build
+// 1.2 - 3.4.5 => >=1.2.0-0 <=3.4.5
+// 1.2.3 - 3.4 => >=1.2.0-0 <3.5.0-0 Any 3.4.x will do
+// 1.2 - 3.4 => >=1.2.0-0 <3.5.0-0
+function hyphenReplace($0,
+                       from, fM, fm, fp, fpr, fb,
+                       to, tM, tm, tp, tpr, tb) {
+
+  if (isX(fM))
+    from = '';
+  else if (isX(fm))
+    from = '>=' + fM + '.0.0-0';
+  else if (isX(fp))
+    from = '>=' + fM + '.' + fm + '.0-0';
+  else
+    from = '>=' + from;
+
+  if (isX(tM))
+    to = '';
+  else if (isX(tm))
+    to = '<' + (+tM + 1) + '.0.0-0';
+  else if (isX(tp))
+    to = '<' + tM + '.' + (+tm + 1) + '.0-0';
+  else if (tpr)
+    to = '<=' + tM + '.' + tm + '.' + tp + '-' + tpr;
+  else
+    to = '<=' + to;
+
+  return (from + ' ' + to).trim();
+}
+
+
+// if ANY of the sets match ALL of its comparators, then pass
+Range.prototype.test = function(version) {
+  if (!version)
+    return false;
+  for (var i = 0; i < this.set.length; i++) {
+    if (testSet(this.set[i], version))
+      return true;
+  }
+  return false;
+};
+
+function testSet(set, version) {
+  for (var i = 0; i < set.length; i++) {
+    if (!set[i].test(version))
+      return false;
+  }
+  return true;
+}
+
+exports.satisfies = satisfies;
+function satisfies(version, range, loose) {
+  try {
+    range = new Range(range, loose);
+  } catch (er) {
+    return false;
+  }
+  return range.test(version);
+}
+
+exports.maxSatisfying = maxSatisfying;
+function maxSatisfying(versions, range, loose) {
+  return versions.filter(function(version) {
+    return satisfies(version, range, loose);
+  }).sort(function(a, b) {
+    return rcompare(a, b, loose);
+  })[0] || null;
+}
+
+exports.validRange = validRange;
+function validRange(range, loose) {
+  try {
+    // Return '*' instead of '' so that truthiness works.
+    // This will throw if it's invalid anyway
+    return new Range(range, loose).range || '*';
+  } catch (er) {
+    return null;
+  }
+}
+
+// Determine if version is less than all the versions possible in the range
+exports.ltr = ltr;
+function ltr(version, range, loose) {
+  return outside(version, range, '<', loose);
+}
+
+// Determine if version is greater than all the versions possible in the range.
+exports.gtr = gtr;
+function gtr(version, range, loose) {
+  return outside(version, range, '>', loose);
+}
+
+exports.outside = outside;
+function outside(version, range, hilo, loose) {
+  version = new SemVer(version, loose);
+  range = new Range(range, loose);
+
+  var gtfn, ltefn, ltfn, comp, ecomp;
+  switch (hilo) {
+    case '>':
+      gtfn = gt;
+      ltefn = lte;
+      ltfn = lt;
+      comp = '>';
+      ecomp = '>=';
+      break;
+    case '<':
+      gtfn = lt;
+      ltefn = gte;
+      ltfn = gt;
+      comp = '<';
+      ecomp = '<=';
+      break;
+    default:
+      throw new TypeError('Must provide a hilo val of "<" or ">"');
+  }
+
+  // If it satisifes the range it is not outside
+  if (satisfies(version, range, loose)) {
+    return false;
+  }
+
+  // From now on, variable terms are as if we're in "gtr" mode.
+  // but note that everything is flipped for the "ltr" function.
+
+  for (var i = 0; i < range.set.length; ++i) {
+    var comparators = range.set[i];
+
+    var high = null;
+    var low = null;
+
+    comparators.forEach(function(comparator) {
+      high = high || comparator;
+      low = low || comparator;
+      if (gtfn(comparator.semver, high.semver, loose)) {
+        high = comparator;
+      } else if (ltfn(comparator.semver, low.semver, loose)) {
+        low = comparator;
+      }
+    });
+
+    // If the edge version comparator has a operator then our version
+    // isn't outside it
+    if (high.operator === comp || high.operator === ecomp) {
+      return false;
+    }
+
+    // If the lowest version comparator has an operator and our version
+    // is less than it then it isn't higher than the range
+    if ((!low.operator || low.operator === comp) &&
+        ltefn(version, low.semver)) {
+      return false;
+    } else if (low.operator === ecomp && ltfn(version, low.semver)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Use the define() function if we're in AMD land
+if (typeof define === 'function' && define.amd)
+  define(exports);
+
+})(
+  typeof exports === 'object' ? exports :
+  typeof define === 'function' && define.amd ? {} :
+  semver = {}
+);
+
+},{}],61:[function(require,module,exports){
+module.exports = {
+  // messenger events
+  dataEvent: 'data',
+  openEvent: 'open',
+  closeEvent: 'close',
+
+  // messenger functions
+  writeMethod: 'write',
+  closeMethod: 'close',
+
+  // leave timeout (ms)
+  leaveTimeout: 3000
+};
+},{}],62:[function(require,module,exports){
+/* jshint node: true */
+'use strict';
+
+var debug = require('cog/logger')('rtc-signaller');
+var extend = require('cog/extend');
+var roles = ['a', 'b'];
+
+/**
+  #### announce
+
+  ```
+  /announce|%metadata%|{"id": "...", ... }
+  ```
+
+  When an announce message is received by the signaller, the attached
+  object data is decoded and the signaller emits an `announce` message.
+
+**/
+module.exports = function(signaller) {
+
+  function copyData(target, source) {
+    if (target && source) {
+      for (var key in source) {
+        target[key] = source[key];
+      }
+    }
+
+    return target;
+  }
+
+  function dataAllowed(data) {
+    var evt = {
+      data: data,
+      allow: true
+    };
+
+    signaller.emit('peer:filter', evt);
+
+    return evt.allow;
+  }
+
+  return function(args, messageType, srcData, srcState, isDM) {
+    var data = args[0];
+    var peer;
+
+    debug('announce handler invoked, received data: ', data);
+
+    // if we have valid data then process
+    if (data && data.id && data.id !== signaller.id) {
+      if (! dataAllowed(data)) {
+        return;
+      }
+      // check to see if this is a known peer
+      peer = signaller.peers.get(data.id);
+
+      // trigger the peer connected event to flag that we know about a
+      // peer connection. The peer has passed the "filter" check but may
+      // be announced / updated depending on previous connection status
+      signaller.emit('peer:connected', data.id, data);
+
+      // if the peer is existing, then update the data
+      if (peer && (! peer.inactive)) {
+        debug('signaller: ' + signaller.id + ' received update, data: ', data);
+
+        // update the data
+        copyData(peer.data, data);
+
+        // trigger the peer update event
+        return signaller.emit('peer:update', data, srcData);
+      }
+
+      // create a new peer
+      peer = {
+        id: data.id,
+
+        // initialise the local role index
+        roleIdx: [data.id, signaller.id].sort().indexOf(data.id),
+
+        // initialise the peer data
+        data: {}
+      };
+
+      // initialise the peer data
+      copyData(peer.data, data);
+
+      // reset inactivity state
+      clearTimeout(peer.leaveTimer);
+      peer.inactive = false;
+
+      // set the peer data
+      signaller.peers.set(data.id, peer);
+
+      // if this is an initial announce message (no vector clock attached)
+      // then send a announce reply
+      if (signaller.autoreply && (! isDM)) {
+        signaller
+          .to(data.id)
+          .send('/announce', signaller.attributes);
+      }
+
+      // emit a new peer announce event
+      return signaller.emit('peer:announce', data, peer);
+    }
+  };
+};
+},{"cog/extend":24,"cog/logger":26}],63:[function(require,module,exports){
+/* jshint node: true */
+'use strict';
+
+/**
+  ### signaller message handlers
+
+**/
+
+module.exports = function(signaller, opts) {
+  return {
+    announce: require('./announce')(signaller, opts),
+    leave: require('./leave')(signaller, opts)
+  };
+};
+},{"./announce":62,"./leave":64}],64:[function(require,module,exports){
+/* jshint node: true */
+'use strict';
+
+/**
+  #### leave
+
+  ```
+  /leave|{"id":"..."}
+  ```
+
+  When a leave message is received from a peer, we check to see if that is
+  a peer that we are managing state information for and if we are then the
+  peer state is removed.
+
+**/
+module.exports = function(signaller, opts) {
+  return function(args) {
+    var data = args[0];
+    var peer = signaller.peers.get(data && data.id);
+
+    if (peer) {
+      // start the inactivity timer
+      peer.leaveTimer = setTimeout(function() {
+        peer.inactive = true;
+        signaller.emit('peer:leave', data.id, peer);
+      }, opts.leaveTimeout);
+    }
+
+    // emit the event
+    signaller.emit('peer:disconnected', data.id, peer);
+  };
+};
+},{}],65:[function(require,module,exports){
+/* jshint node: true */
+'use strict';
+
+var debug = require('cog/logger')('rtc-signaller');
+var detect = require('rtc-core/detect');
+var EventEmitter = require('events').EventEmitter;
+var uuid = require('uuid');
+var defaults = require('cog/defaults');
+var extend = require('cog/extend');
+var throttle = require('cog/throttle');
+var FastMap = require('collections/fast-map');
+
+// initialise the list of valid "write" methods
+var WRITE_METHODS = ['write', 'send'];
+var CLOSE_METHODS = ['close', 'end'];
+
+// initialise signaller metadata so we don't have to include the package.json
+// TODO: make this checkable with some kind of prepublish script
+var metadata = {
+  version: '1.2.2'
+};
+
+/**
+  # rtc-signaller
+
+  The `rtc-signaller` module provides a transportless signalling
+  mechanism for WebRTC.
+
+  ## Purpose
+
+  The signaller provides set of client-side tools that assist with the
+  setting up an `PeerConnection` and helping them communicate. All that is
+  required for the signaller to operate is a suitable messenger.
+
+  A messenger is a simple object that implements node
+  [EventEmitter](http://nodejs.org/api/events.html) style `on` events for
+  `open`, `close`, `message` events, and also a `send` method by which
+  data will be send "over-the-wire".
+
+  By using this approach, we can conduct signalling over any number of
+  mechanisms:
+
+  - local, in memory message passing
+  - via WebSockets and higher level abstractions (such as
+    [primus](https://github.com/primus/primus))
+  - also over WebRTC data-channels (very meta, and admittedly a little
+    complicated).
+
+  ## Getting Started
+
+  While the signaller is capable of communicating by a number of different
+  messengers (i.e. anything that can send and receive messages over a wire)
+  it comes with support for understanding how to connect to an
+  [rtc-switchboard](https://github.com/rtc-io/rtc-switchboard) out of the box.
+
+  The following code sample demonstrates how:
+
+  <<< examples/getting-started.js
+
+  ## Signaller Events
+
+  There is a number of events that are generating throughout the lifecycle of
+  a signaller.  These events are derived from events and states that are
+  generated by the underlying messenger used by the signaller.  In most cases
+  this is a [primus](https://github.com/primus/primus) websocket connection
+  (or spark).
+
+  ### Events regarding local state
+
+  The following events are generated by the signaller in response to updates
+  in it's own state:
+
+
+  - `connected`
+
+    A connection has been established via the underlying
+    messenger to a signalling server (or equivalent).
+
+  - `disconnected`
+
+    The connection has been lost (possibly temporarily) with
+    the signalling server (or transport).  It is possible that the connection
+    will be re-established so this does not necessarily mean the end.
+
+  ### Events regarding peer state
+
+  The following events relate to information that has been relayed to this
+  signaller about other peers:
+
+  - `peer:filter`
+
+    The `peer:filter` event is triggered prior to the `peer:announce` or
+    `peer:update` events being fired and provides an application the
+    opportunity to reject a peer.  The handler for this event is passed
+    a JS object that contains a `data` attribute for the announce data, and an
+    `allow` flag that controls whether the peer is to be accepted.
+
+    Due to the way event emitters behave in node, the last handler invoked
+    is the authority on whether the peer is accepted or not (so make sure to
+    check the previous state of the allow flag):
+
+    ```js
+    // only accept connections from Bob
+    signaller.on('peer:filter', function(evt) {
+      evt.allow = evt.allow && (evt.data.name === 'Bob');
+    });
+
+    __NOTE:__ This event handler does use a different syntax in the handler
+    which provides application developers the opportunity to modify data from
+    the event (in this case the `allow` attribute).
+
+  - `peer:connected`
+
+     If a peer has passed the `peer:filter` test (either
+     no filtering has been applied, or the allow flag is set to true in the
+     filter events) then a `peer:connected` event will be emitted:
+
+    ```js
+    signaller.on('peer:connected', function(id) {
+      console.log('peer ' + id + ' has connected');
+    });
+    ```
+
+    The primary use case for this event is if you are updating part of your
+    application UI to flag in response to a `peer:disconnected` event being
+    fired (which can be due to poor network connectivity), then you can use
+    the `peer:connected` event to restore UI elements to represent an active
+    connection on receiving this event.
+
+  - `peer:announce`
+
+    While the `peer:connected` event is triggered each time
+    a peer reconnects and announces to the signalling server, a `peer:announce`
+    event is only emitted by your local signaller if this is considered a
+    new connection from a peer.
+
+    If you are writing a WebRTC application, then this event is the best place
+    to start creating `RTCPeerConnection` objects between the local machine
+    and your remote, announced counterpart.  You will then be able to
+    [couple](https://github.com/rtc-io/rtc#rtccouple) those connections
+    together using the signaller.
+
+    ```js
+    signaller.on('peer:announce', function(data) {
+      console.log('discovered new peer: ' + data.id, data);
+
+      // TODO: create a peer connection with our new friend :)
+    });
+    ```
+
+  - `peer:update`
+
+    An existing peer in the system has been "re-announced"
+    possibly with some data changes:
+
+    ```js
+    signaller.on('peer:update', function(data) {
+      console.log('data update from peer: ' + data.id, data);
+    });
+    ```
+
+  - `peer:disconnected`
+
+    A peer has disconnected from the signalling server,
+    but may reconnect if it manages to re-establish connectivity.
+
+    ```js
+    signaller.on('peer:disconnected', function(id) {
+      console.log('peer ' + id + ' has gone, but they might be back...');
+    });
+    ```
+
+  - `peer:leave`
+
+    This event is triggered when the signaller has previously
+    received a disconnection notification for a peer, and a reconnection has
+    not been made by that peer within a certain time interval.
+
+    The default `leaveTimeout` is configured in the
+    [defaults](https://github.com/rtc-io/rtc-signaller/blob/master/defaults.js)
+    but can be overriden by passing configuration options when creating the
+    signaller.
+
+    ```js
+    signaller.on('peer:leave', function(id) {
+      console.log('peer ' + id + ' has left :(');
+    });
+    ```
+
+  ## Signal Flow Diagrams
+
+  Displayed below are some diagrams how the signalling flow between peers
+  behaves.  In each of the diagrams we illustrate three peers (A, B and C)
+  participating discovery and coordinating RTCPeerConnection handshakes.
+
+  In each case, only the interaction between the clients is represented not
+  how a signalling server
+  (such as [rtc-switchboard](https://github.com/rtc-io/rtc-switchboard)) would
+  pass on broadcast messages, etc.  This is done for two reasons:
+
+  1. It is out of scope of this documentation.
+  2. The `rtc-signaller` has been designed to work without having to rely on
+     any intelligence in the server side signalling component.  In the
+     instance that a signaller broadcasts all messages to all connected peers
+     then `rtc-signaller` should be smart enough to make sure everything works
+     as expected.
+
+  ### Peer Discovery / Announcement
+
+  This diagram illustrates the process of how peer `A` announces itself to
+  peers `B` and `C`, and in turn they announce themselves.
+
+  ![](https://raw.github.com/rtc-io/rtc-signaller/master/docs/announce.png)
+
+  ### Editing / Updating the Diagrams
+
+  Each of the diagrams has been generated using
+  [mscgen](http://www.mcternan.me.uk/mscgen/index.html) and the source for
+  these documents can be found in the `docs/` folder of this repository.
+
+  ## Reference
+
+  The `rtc-signaller` module is designed to be used primarily in a functional
+  way and when called it creates a new signaller that will enable
+  you to communicate with other peers via your messaging network.
+
+  ```js
+  // create a signaller from something that knows how to send messages
+  var signaller = require('rtc-signaller')(messenger);
+  ```
+
+  As demonstrated in the getting started guide, you can also pass through
+  a string value instead of a messenger instance if you simply want to
+  connect to an existing `rtc-switchboard` instance.
+
+**/
+var sig = module.exports = function(messenger, opts) {
+
+  // get the autoreply setting
+  var autoreply = (opts || {}).autoreply;
+
+  // initialise the metadata
+  var localMeta = {};
+
+  // create the signaller
+  var signaller = new EventEmitter();
+
+  // initialise the id
+  var id = signaller.id = (opts || {}).id || uuid.v4();
+
+  // initialise the attributes
+  var attributes = signaller.attributes = {
+    browser: detect.browser,
+    browserVersion: detect.browserVersion,
+    id: id,
+    agent: 'signaller@' + metadata.version
+  };
+
+  // create the peers map
+  var peers = signaller.peers = new FastMap();
+
+  // initialise the data event name
+
+  var connected = false;
+  var write;
+  var close;
+  var processor;
+  var announceTimer = 0;
+
+  function announceOnReconnect() {
+    signaller.announce();
+    // setTimeout(signaller.announce, );
+  }
+
+  function bindBrowserEvents() {
+    messenger.addEventListener('message', function(evt) {
+      processor(evt.data);
+    });
+
+    messenger.addEventListener('open', function(evt) {
+      signaller.emit('open');
+      signaller.emit('connected');
+    });
+  }
+
+  function bindEvents() {
+    // if we don't have an on function for the messenger, then do nothing
+    if (typeof messenger.on != 'function') {
+      return;
+    }
+
+    // handle message data events
+    messenger.on(opts.dataEvent, processor);
+
+    // when the connection is open, then emit an open event and a connected event
+    messenger.on(opts.openEvent, function() {
+      signaller.emit('open');
+      signaller.emit('connected');
+    });
+
+    messenger.on(opts.closeEvent, function() {
+      signaller.emit('disconnected');
+    });
+  }
+
+  function connectToPrimus(url) {
+    // load primus
+    sig.loadPrimus(url, function(err, Primus) {
+      if (err) {
+        return signaller.emit('error', err);
+      }
+
+      // create the actual messenger from a primus connection
+      signaller._messenger = messenger = Primus.connect(url);
+
+      // now init
+      init();
+    });
+  }
+
+  function createDataLine(args) {
+    return args.map(prepareArg).join('|');
+  }
+
+  function createMetadata() {
+    return extend({}, localMeta, { id: signaller.id });
+  }
+
+  function extractProp(name) {
+    return messenger[name];
+  }
+
+  function isF(target) {
+    return typeof target == 'function';
+  }
+
+  function init() {
+    // extract the write and close function references
+    write = [opts.writeMethod].concat(WRITE_METHODS).map(extractProp).filter(isF)[0];
+    close = [opts.closeMethod].concat(CLOSE_METHODS).map(extractProp).filter(isF)[0];
+
+    // create the processor
+    signaller.process = processor = require('./processor')(signaller, opts);
+
+    // if the messenger doesn't provide a valid write method, then complain
+    if (typeof write != 'function') {
+      throw new Error('provided messenger does not implement a "' +
+        writeMethod + '" write method');
+    }
+
+    // handle core browser messenging apis
+    if (typeof messenger.addEventListener == 'function') {
+      bindBrowserEvents();
+    }
+    else {
+      bindEvents();
+    }
+
+    // determine if we are connected or not
+    connected = messenger.connected || false;
+    if (! connected) {
+      signaller.once('connected', function() {
+        connected = true;
+
+        // always announce on reconnect
+        signaller.on('connected', announceOnReconnect);
+      });
+    }
+
+    // emit the initialized event
+    setTimeout(signaller.emit.bind(signaller, 'init'), 0);
+  }
+
+  function prepareArg(arg) {
+    if (typeof arg == 'object' && (! (arg instanceof String))) {
+      return JSON.stringify(arg);
+    }
+    else if (typeof arg == 'function') {
+      return null;
+    }
+
+    return arg;
+  }
+
+  /**
+    ### signaller#send(message, data*)
+
+    Use the send function to send a message to other peers in the current
+    signalling scope (if announced in a room this will be a room, otherwise
+    broadcast to all peers connected to the signalling server).
+
+  **/
+  var send = signaller.send = function() {
+    // iterate over the arguments and stringify as required
+    // var metadata = { id: signaller.id };
+    var args = [].slice.call(arguments);
+    var dataline;
+
+    // inject the metadata
+    args.splice(1, 0, createMetadata());
+    dataline = createDataLine(args);
+
+    // if we are not initialized, then wait until we are
+    if (! connected) {
+      return signaller.once('connected', function() {
+        write.call(messenger, dataline);
+      });
+    }
+
+    // send the data over the messenger
+    return write.call(messenger, dataline);
+  };
+
+  /**
+    ### announce(data?)
+
+    The `announce` function of the signaller will pass an `/announce` message
+    through the messenger network.  When no additional data is supplied to
+    this function then only the id of the signaller is sent to all active
+    members of the messenging network.
+
+    #### Joining Rooms
+
+    To join a room using an announce call you simply provide the name of the
+    room you wish to join as part of the data block that you annouce, for
+    example:
+
+    ```js
+    signaller.announce({ room: 'testroom' });
+    ```
+
+    Signalling servers (such as
+    [rtc-switchboard](https://github.com/rtc-io/rtc-switchboard)) will then
+    place your peer connection into a room with other peers that have also
+    announced in this room.
+
+    Once you have joined a room, the server will only deliver messages that
+    you `send` to other peers within that room.
+
+    #### Providing Additional Announce Data
+
+    There may be instances where you wish to send additional data as part of
+    your announce message in your application.  For instance, maybe you want
+    to send an alias or nick as part of your announce message rather than just
+    use the signaller's generated id.
+
+    If for instance you were writing a simple chat application you could join
+    the `webrtc` room and tell everyone your name with the following announce
+    call:
+
+    ```js
+    signaller.announce({
+      room: 'webrtc',
+      nick: 'Damon'
+    });
+    ```
+
+    #### Announcing Updates
+
+    The signaller is written to distinguish between initial peer announcements
+    and peer data updates (see the docs on the announce handler below). As
+    such it is ok to provide any data updates using the announce method also.
+
+    For instance, I could send a status update as an announce message to flag
+    that I am going offline:
+
+    ```js
+    signaller.announce({ status: 'offline' });
+    ```
+
+  **/
+  signaller.announce = function(data, sender) {
+    clearTimeout(announceTimer);
+
+    // update internal attributes
+    extend(attributes, data, { id: signaller.id });
+
+    // if we are already connected, then ensure we announce on
+    // reconnect
+    if (connected) {
+      // always announce on reconnect
+      signaller.removeListener('connected', announceOnReconnect);
+      signaller.on('connected', announceOnReconnect);
+    }
+
+    // send the attributes over the network
+    return announceTimer = setTimeout(function() {
+      (sender || send)('/announce', attributes);
+    }, (opts || {}).announceDelay || 10);
+  };
+
+  /**
+    ### isMaster(targetId)
+
+    A simple function that indicates whether the local signaller is the master
+    for it's relationship with peer signaller indicated by `targetId`.  Roles
+    are determined at the point at which signalling peers discover each other,
+    and are simply worked out by whichever peer has the lowest signaller id
+    when lexigraphically sorted.
+
+    For example, if we have two signaller peers that have discovered each
+    others with the following ids:
+
+    - `b11f4fd0-feb5-447c-80c8-c51d8c3cced2`
+    - `8a07f82e-49a5-4b9b-a02e-43d911382be6`
+
+    They would be assigned roles:
+
+    - `b11f4fd0-feb5-447c-80c8-c51d8c3cced2`
+    - `8a07f82e-49a5-4b9b-a02e-43d911382be6` (master)
+
+  **/
+  signaller.isMaster = function(targetId) {
+    var peer = peers.get(targetId);
+
+    return peer && peer.roleIdx !== 0;
+  };
+
+  /**
+    ### leave()
+
+    Tell the signalling server we are leaving.  Calling this function is
+    usually not required though as the signalling server should issue correct
+    `/leave` messages when it detects a disconnect event.
+
+  **/
+  signaller.leave = signaller.close = function() {
+    // send the leave signal
+    send('/leave', { id: id });
+
+    // stop announcing on reconnect
+    signaller.removeListener('connected', announceOnReconnect);
+
+    // call the close method
+    if (typeof close == 'function') {
+      close.call(messenger);
+    }
+  };
+
+  /**
+    ### metadata(data?)
+
+    Get (pass no data) or set the metadata that is passed through with each
+    request sent by the signaller.
+
+    __NOTE:__ Regardless of what is passed to this function, metadata
+    generated by the signaller will **always** include the id of the signaller
+    and this cannot be modified.
+  **/
+  signaller.metadata = function(data) {
+    if (arguments.length === 0) {
+      return extend({}, localMeta);
+    }
+
+    localMeta = extend({}, data);
+  };
+
+  /**
+    ### to(targetId)
+
+    Use the `to` function to send a message to the specified target peer.
+    A large parge of negotiating a WebRTC peer connection involves direct
+    communication between two parties which must be done by the signalling
+    server.  The `to` function provides a simple way to provide a logical
+    communication channel between the two parties:
+
+    ```js
+    var send = signaller.to('e95fa05b-9062-45c6-bfa2-5055bf6625f4').send;
+
+    // create an offer on a local peer connection
+    pc.createOffer(
+      function(desc) {
+        // set the local description using the offer sdp
+        // if this occurs successfully send this to our peer
+        pc.setLocalDescription(
+          desc,
+          function() {
+            send('/sdp', desc);
+          },
+          handleFail
+        );
+      },
+      handleFail
+    );
+    ```
+
+  **/
+  signaller.to = function(targetId) {
+    // create a sender that will prepend messages with /to|targetId|
+    var sender = function() {
+      // get the peer (yes when send is called to make sure it hasn't left)
+      var peer = signaller.peers.get(targetId);
+      var args;
+
+      if (! peer) {
+        throw new Error('Unknown peer: ' + targetId);
+      }
+
+      // if the peer is inactive, then abort
+      if (peer.inactive) {
+        return;
+      }
+
+      args = [
+        '/to',
+        targetId
+      ].concat([].slice.call(arguments));
+
+      // inject metadata
+      args.splice(3, 0, createMetadata());
+
+      setTimeout(function() {
+        var msg = createDataLine(args);
+        debug('TX (' + targetId + '): ' + msg);
+
+        write.call(messenger, msg);
+      }, 0);
+    };
+
+    return {
+      announce: function(data) {
+        return signaller.announce(data, sender);
+      },
+
+      send: sender,
+    }
+  };
+
+  // remove max listeners from the emitter
+  signaller.setMaxListeners(0);
+
+  // initialise opts defaults
+  opts = defaults({}, opts, require('./defaults'));
+
+  // set the autoreply flag
+  signaller.autoreply = autoreply === undefined || autoreply;
+
+  // if the messenger is a string, then we are going to attach to a
+  // ws endpoint and automatically set up primus
+  if (typeof messenger == 'string' || (messenger instanceof String)) {
+    connectToPrimus(messenger);
+  }
+  // otherwise, initialise the connection
+  else {
+    init();
+  }
+
+  // connect an instance of the messenger to the signaller
+  signaller._messenger = messenger;
+
+  // expose the process as a process function
+  signaller.process = processor;
+
+  return signaller;
+};
+
+sig.loadPrimus = require('./primus-loader');
+},{"./defaults":61,"./primus-loader":66,"./processor":67,"cog/defaults":23,"cog/extend":24,"cog/logger":26,"cog/throttle":27,"collections/fast-map":42,"events":5,"rtc-core/detect":59,"uuid":76}],66:[function(require,module,exports){
 /* jshint node: true */
 /* global document, location, Primus: false */
 'use strict';
@@ -12313,7 +14108,7 @@ module.exports = function(signalhost, callback) {
 
   document.body.appendChild(script);
 };
-},{"url":19}],64:[function(require,module,exports){
+},{"url":20}],67:[function(require,module,exports){
 /* jshint node: true */
 'use strict';
 
@@ -12339,8 +14134,8 @@ var jsonparse = require('cog/jsonparse');
   - Finally, does the message match any patterns that we are listening for?
     If so, then pass the entire message contents onto the registered handler.
 **/
-module.exports = function(signaller) {
-  var handlers = require('./handlers')(signaller);
+module.exports = function(signaller, opts) {
+  var handlers = require('./handlers')(signaller, opts);
 
   function sendEvent(parts, srcState, data) {
     // initialise the event name
@@ -12390,10 +14185,7 @@ module.exports = function(signaller) {
     parts = parts || data.split('|').map(jsonparse);
 
     // if we have a specific handler for the action, then invoke
-    if (typeof parts[0] == 'string' && parts[0].charAt(0) === '/') {
-      // look for a handler for the message type
-      handler = handlers[parts[0].slice(1)];
-
+    if (typeof parts[0] == 'string') {
       // extract the metadata from the input data
       srcData = parts[1];
 
@@ -12406,35 +14198,112 @@ module.exports = function(signaller) {
       // get the source state
       srcState = signaller.peers.get(srcData && srcData.id) || srcData;
 
-      if (typeof handler == 'function') {
-        handler(
-          parts.slice(2),
-          parts[0].slice(1),
+      // handle commands
+      if (parts[0].charAt(0) === '/') {
+        // look for a handler for the message type
+        handler = handlers[parts[0].slice(1)];
+
+        if (typeof handler == 'function') {
+          handler(
+            parts.slice(2),
+            parts[0].slice(1),
+            srcData,
+            srcState,
+            isDirectMessage
+          );
+        }
+        else {
+          sendEvent(parts, srcState, originalData);
+        }
+      }
+      // otherwise, emit data
+      else {
+        signaller.emit(
+          'data',
+          parts.slice(0, 1).concat(parts.slice(2)),
           srcData,
           srcState,
           isDirectMessage
         );
       }
-      else {
-        sendEvent(parts, srcState, originalData);
-      }
     }
   };
 };
-},{"./handlers":42,"cog/jsonparse":25,"cog/logger":26}],65:[function(require,module,exports){
+},{"./handlers":63,"cog/jsonparse":25,"cog/logger":26}],68:[function(require,module,exports){
 /* jshint node: true */
-/* global RTCIceCandidate: false */
-/* global RTCSessionDescription: false */
+'use strict';
+
+var debug = require('cog/logger')('rtc/cleanup');
+
+var CANNOT_CLOSE_STATES = [
+  'closed'
+];
+
+var EVENTNAMES = [
+  'addstream',
+  'datachannel',
+  'icecandidate',
+  'iceconnectionstatechange',
+  'negotiationneeded',
+  'removestream',
+  'signalingstatechange'
+];
+
+/**
+  ### rtc/cleanup
+
+  ```
+  cleanup(pc)
+  ```
+
+  The `cleanup` function is used to ensure that a peer connection is properly
+  closed and ready to be cleaned up by the browser.
+
+**/
+module.exports = function(pc) {
+  // see if we can close the connection
+  var currentState = pc.iceConnectionState;
+  var canClose = CANNOT_CLOSE_STATES.indexOf(currentState) < 0;
+
+  if (canClose) {
+    debug('attempting connection close, current state: '+ pc.iceConnectionState);
+    pc.close();
+  }
+
+  // remove the event listeners
+  // after a short delay giving the connection time to trigger
+  // close and iceconnectionstatechange events
+  setTimeout(function() {
+    EVENTNAMES.forEach(function(evtName) {
+      if (pc['on' + evtName]) {
+        pc['on' + evtName] = null;
+      }
+    });
+  }, 100);
+};
+},{"cog/logger":26}],69:[function(require,module,exports){
+/* jshint node: true */
 'use strict';
 
 var async = require('async');
+var cleanup = require('./cleanup');
 var monitor = require('./monitor');
 var detect = require('./detect');
+var CLOSED_STATES = [ 'closed', 'failed' ];
+
+// track the various supported CreateOffer / CreateAnswer contraints
+// that we recognize and allow
+var OFFER_ANSWER_CONSTRAINTS = [
+  'offerToReceiveVideo',
+  'offerToReceiveAudio',
+  'voiceActivityDetection',
+  'iceRestart'
+];
 
 /**
-  ## rtc/couple
+  ### rtc/couple
 
-  ### couple(pc, targetId, signaller, opts?)
+  #### couple(pc, targetId, signaller, opts?)
 
   Couple a WebRTC connection with another webrtc connection identified by
   `targetId` via the signaller.
@@ -12446,17 +14315,7 @@ var detect = require('./detect');
     A simple function for filtering SDP as part of the peer
     connection handshake (see the Using Filters details below).
 
-  - `maxAttempts` (default: 1)
-
-    How many times should negotiation be attempted.  This is
-    **experimental** functionality for attempting connection negotiation
-    if it fails.
-
-  - `attemptDelay` (default: 3000)
-
-    The amount of ms to wait between connection negotiation attempts.
-
-  #### Example Usage
+  ##### Example Usage
 
   ```js
   var couple = require('rtc/couple');
@@ -12464,7 +14323,7 @@ var detect = require('./detect');
   couple(pc, '54879965-ce43-426e-a8ef-09ac1e39a16d', signaller);
   ```
 
-  #### Using Filters
+  ##### Using Filters
 
   In certain instances you may wish to modify the raw SDP that is provided
   by the `createOffer` and `createAnswer` calls.  This can be done by passing
@@ -12478,17 +14337,22 @@ var detect = require('./detect');
   ```
 
 **/
-function couple(conn, targetId, signaller, opts) {
-  var debug = require('cog/logger')('couple');
+function couple(pc, targetId, signaller, opts) {
+  var debugLabel = (opts || {}).debugLabel || 'rtc';
+  var debug = require('cog/logger')(debugLabel + '/couple');
 
   // create a monitor for the connection
-  var mon = monitor(conn);
-  var blockId;
-  var stages = {};
+  var mon = monitor(pc, targetId, signaller, opts);
   var queuedCandidates = [];
   var sdpFilter = (opts || {}).sdpfilter;
   var reactive = (opts || {}).reactive;
   var offerTimeout;
+  var endOfCandidates = true;
+
+  // configure the time to wait between receiving a 'disconnect'
+  // iceConnectionState and determining that we are closed
+  var disconnectTimeout = (opts || {}).disconnectTimeout || 10000;
+  var disconnectTimer;
 
   // if the signaller does not support this isMaster function throw an
   // exception
@@ -12499,17 +14363,16 @@ function couple(conn, targetId, signaller, opts) {
   // initilaise the negotiation helpers
   var isMaster = signaller.isMaster(targetId);
 
-
   var createOffer = prepNegotiate(
     'createOffer',
     isMaster,
-    [ checkStable, checkNotConnecting ]
+    [ checkStable ]
   );
 
   var createAnswer = prepNegotiate(
     'createAnswer',
     true,
-    [ checkNotConnecting ]
+    []
   );
 
   // initialise the processing queue (one at a time please)
@@ -12531,8 +14394,6 @@ function couple(conn, targetId, signaller, opts) {
     detect('RTCIceCandidate');
 
   function abort(stage, sdp, cb) {
-    var stageHandler = stages[stage];
-
     return function(err) {
       // log the error
       console.error('rtc/couple error (' + stage + '): ', err);
@@ -12544,7 +14405,7 @@ function couple(conn, targetId, signaller, opts) {
   }
 
   function applyCandidatesWhenStable() {
-    if (conn.signalingState == 'stable' && conn.remoteDescription) {
+    if (pc.signalingState == 'stable' && pc.remoteDescription) {
       debug('signaling state = stable, applying queued candidates');
       mon.removeListener('change', applyCandidatesWhenStable);
 
@@ -12553,7 +14414,7 @@ function couple(conn, targetId, signaller, opts) {
         debug('applying queued candidate', data);
 
         try {
-          conn.addIceCandidate(new RTCIceCandidate(data));
+          pc.addIceCandidate(new RTCIceCandidate(data));
         }
         catch (e) {
           debug('invalidate candidate specified: ', data);
@@ -12563,12 +14424,12 @@ function couple(conn, targetId, signaller, opts) {
   }
 
   function checkNotConnecting(negotiate) {
-    if (conn.iceConnectionState != 'checking') {
+    if (pc.iceConnectionState != 'checking') {
       return true;
     }
 
     debug('connection state is checking, will wait to create a new offer');
-    mon.once('active', function() {
+    mon.once('connected', function() {
       q.push({ op: negotiate });
     });
 
@@ -12576,13 +14437,13 @@ function couple(conn, targetId, signaller, opts) {
   }
 
   function checkStable(negotiate) {
-    if (conn.signalingState === 'stable') {
+    if (pc.signalingState === 'stable') {
       return true;
     }
 
     debug('cannot create offer, signaling state != stable, will retry');
     mon.on('change', function waitForStable() {
-      if (conn.signalingState === 'stable') {
+      if (pc.signalingState === 'stable') {
         q.push({ op: negotiate });
       }
 
@@ -12592,8 +14453,67 @@ function couple(conn, targetId, signaller, opts) {
     return false;
   }
 
+  function decouple() {
+    debug('decoupling ' + signaller.id + ' from ' + targetId);
+
+    // stop the monitor
+    mon.removeAllListeners();
+    mon.stop();
+
+    // cleanup the peerconnection
+    cleanup(pc);
+
+    // remove listeners
+    signaller.removeListener('sdp', handleSdp);
+    signaller.removeListener('candidate', handleRemoteCandidate);
+    signaller.removeListener('negotiate', handleNegotiateRequest);
+  }
+
+  function generateConstraints(methodName) {
+    var constraints = {};
+
+    function reformatConstraints() {
+      var tweaked = {};
+
+      Object.keys(constraints).forEach(function(param) {
+        var sentencedCased = param.charAt(0).toUpperCase() + param.substr(1);
+        tweaked[sentencedCased] = constraints[param];
+      });
+
+      // update the constraints to match the expected format
+      constraints = {
+        mandatory: tweaked
+      };
+    }
+
+    // TODO: customize behaviour based on offer vs answer
+
+    // pull out any valid
+    OFFER_ANSWER_CONSTRAINTS.forEach(function(param) {
+      var sentencedCased = param.charAt(0).toUpperCase() + param.substr(1);
+
+      // if we have no opts, do nothing
+      if (! opts) {
+        return;
+      }
+      // if the parameter has been defined, then add it to the constraints
+      else if (opts[param] !== undefined) {
+        constraints[param] = opts[param];
+      }
+      // if the sentenced cased version has been added, then use that
+      else if (opts[sentencedCased] !== undefined) {
+        constraints[param] = opts[sentencedCased];
+      }
+    });
+
+    // TODO: only do this for the older browsers that require it
+    reformatConstraints();
+
+    return constraints;
+  }
+
   function prepNegotiate(methodName, allowed, preflightChecks) {
-    var hsDebug = require('cog/logger')('handshake-' + methodName);
+    var constraints = generateConstraints(methodName);
 
     // ensure we have a valid preflightChecks array
     preflightChecks = [].concat(preflightChecks || []);
@@ -12608,6 +14528,11 @@ function couple(conn, targetId, signaller, opts) {
         return cb();
       }
 
+      // if the connection is closed, then abort
+      if (isClosed()) {
+        return cb(new Error('connection closed, cannot negotiate'));
+      }
+
       // run the preflight checks
       preflightChecks.forEach(function(check) {
         checksOK = checksOK && check(negotiate);
@@ -12615,6 +14540,7 @@ function couple(conn, targetId, signaller, opts) {
 
       // if the checks have not passed, then abort for the moment
       if (! checksOK) {
+        debug('preflight checks did not pass, aborting ' + methodName);
         return cb();
       }
 
@@ -12624,12 +14550,12 @@ function couple(conn, targetId, signaller, opts) {
       // debug('connection state = ' + conn.iceConnectionState);
       // debug('signaling state = ' + conn.signalingState);
 
-      conn[methodName](
+      pc[methodName](
         function(desc) {
 
           // if a filter has been specified, then apply the filter
           if (typeof sdpFilter == 'function') {
-            desc.sdp = sdpFilter(desc.sdp, conn, methodName);
+            desc.sdp = sdpFilter(desc.sdp, pc, methodName);
           }
 
           q.push({ op: queueLocalDesc(desc) });
@@ -12637,18 +14563,61 @@ function couple(conn, targetId, signaller, opts) {
         },
 
         // on error, abort
-        abort(methodName, '', cb)
+        abort(methodName, '', cb),
+
+        // include the appropriate constraints
+        constraints
       );
     };
   }
 
+  function handleConnectionClose() {
+    debug('captured pc close, iceConnectionState = ' + pc.iceConnectionState);
+    decouple();
+  }
+
+  function handleDisconnect() {
+    debug('captured pc disconnect, monitoring connection status');
+
+    // start the disconnect timer
+    disconnectTimer = setTimeout(function() {
+      debug('manually closing connection after disconnect timeout');
+      pc.close();
+    }, disconnectTimeout);
+
+    mon.on('change', handleDisconnectAbort);
+  }
+
+  function handleDisconnectAbort() {
+    debug('connection state changed to: ' + pc.iceConnectionState);
+    resetDisconnectTimer();
+
+    // if we have a closed or failed status, then close the connection
+    if (CLOSED_STATES.indexOf(pc.iceConnectionState) >= 0) {
+      return mon.emit('closed');
+    }
+
+    mon.once('disconnect', handleDisconnect);
+  };
+
   function handleLocalCandidate(evt) {
     if (evt.candidate) {
+      resetDisconnectTimer();
+
       signaller.to(targetId).send('/candidate', evt.candidate);
+      endOfCandidates = false;
     }
-    else if (conn.iceGatheringState === 'complete') {
-      debug('ice gathering state complete')
+    else if (! endOfCandidates) {
+      endOfCandidates = true;
+      debug('ice gathering state complete');
       signaller.to(targetId).send('/endofcandidates', {});
+    }
+  }
+
+  function handleNegotiateRequest(src) {
+    if (src.id === targetId) {
+      debug('got negotiate request from ' + targetId + ', creating offer');
+      q.push({ op: createOffer });
     }
   }
 
@@ -12658,7 +14627,8 @@ function couple(conn, targetId, signaller, opts) {
     }
 
     // queue candidates while the signaling state is not stable
-    if (conn.signalingState != 'stable' || (! conn.remoteDescription)) {
+    if (pc.signalingState != 'stable' || (! pc.remoteDescription)) {
+      debug('queuing candidate');
       queuedCandidates.push(data);
 
       mon.removeListener('change', applyCandidatesWhenStable);
@@ -12667,7 +14637,7 @@ function couple(conn, targetId, signaller, opts) {
     }
 
     try {
-      conn.addIceCandidate(new RTCIceCandidate(data));
+      pc.addIceCandidate(new RTCIceCandidate(data));
     }
     catch (e) {
       debug('invalidate candidate specified: ', data);
@@ -12675,6 +14645,8 @@ function couple(conn, targetId, signaller, opts) {
   }
 
   function handleSdp(data, src) {
+    var abortType = data.type === 'offer' ? 'createAnswer' : 'createOffer';
+
     // if the source is unknown or not a match, then abort
     if ((! src) || (src.id !== targetId)) {
       return;
@@ -12682,9 +14654,14 @@ function couple(conn, targetId, signaller, opts) {
 
     // prioritize setting the remote description operation
     q.push({ op: function(task, cb) {
+      if (isClosed()) {
+        return cb(new Error('pc closed: cannot set remote description'));
+      }
+
       // update the remote description
       // once successful, send the answer
-      conn.setRemoteDescription(
+      debug('setting remote description');
+      pc.setRemoteDescription(
         new RTCSessionDescription(data),
 
         function() {
@@ -12697,9 +14674,13 @@ function couple(conn, targetId, signaller, opts) {
           cb();
         },
 
-        abort(data.type === 'offer' ? 'createAnswer' : 'createOffer', data.sdp, cb)
+        abort(abortType, data.sdp, cb)
       );
     }});
+  }
+
+  function isClosed() {
+    return CLOSED_STATES.indexOf(pc.iceConnectionState) >= 0;
   }
 
   function queue(negotiateTask) {
@@ -12711,11 +14692,14 @@ function couple(conn, targetId, signaller, opts) {
   }
 
   function queueLocalDesc(desc) {
-    return function setLocalDesc(task, cb, retryCount) {
-      debug('setting local description');
+    return function setLocalDesc(task, cb) {
+      if (isClosed()) {
+        return cb(new Error('connection closed, aborting'));
+      }
 
       // initialise the local description
-      conn.setLocalDescription(
+      debug('setting local description');
+      pc.setLocalDescription(
         desc,
 
         // if successful, then send the sdp over the wire
@@ -12742,6 +14726,14 @@ function couple(conn, targetId, signaller, opts) {
     };
   }
 
+  function resetDisconnectTimer() {
+    mon.removeListener('change', handleDisconnectAbort);
+
+    // clear the disconnect timer
+    debug('reset disconnect timer, state: ' + pc.iceConnectionState);
+    clearTimeout(disconnectTimer);
+  }
+
   // if the target id is not a string, then complain
   if (typeof targetId != 'string' && (! (targetId instanceof String))) {
     throw new Error('2nd argument (targetId) should be a string');
@@ -12749,14 +14741,14 @@ function couple(conn, targetId, signaller, opts) {
 
   // when regotiation is needed look for the peer
   if (reactive) {
-    conn.onnegotiationneeded = function() {
+    pc.onnegotiationneeded = function() {
       debug('renegotiation required, will create offer in 50ms');
       clearTimeout(offerTimeout);
       offerTimeout = setTimeout(queue(createOffer), 50);
     };
   }
 
-  conn.onicecandidate = handleLocalCandidate;
+  pc.onicecandidate = handleLocalCandidate;
 
   // when we receive sdp, then
   signaller.on('sdp', handleSdp);
@@ -12764,22 +14756,12 @@ function couple(conn, targetId, signaller, opts) {
 
   // if this is a master connection, listen for negotiate events
   if (isMaster) {
-    signaller.on('negotiate', function(src) {
-      if (src.id === targetId) {
-        debug('got negotiate request from ' + targetId + ', creating offer');
-        q.push({ op: createOffer });
-      }
-    });
+    signaller.on('negotiate', handleNegotiateRequest);
   }
 
   // when the connection closes, remove event handlers
-  mon.once('closed', function() {
-    debug('closed');
-
-    // remove listeners
-    signaller.removeListener('sdp', handleSdp);
-    signaller.removeListener('candidate', handleRemoteCandidate);
-  });
+  mon.once('closed', handleConnectionClose);
+  mon.once('disconnected', handleDisconnect);
 
   // patch in the create offer functions
   mon.createOffer = queue(createOffer);
@@ -12788,18 +14770,19 @@ function couple(conn, targetId, signaller, opts) {
 }
 
 module.exports = couple;
-},{"./detect":66,"./monitor":69,"async":70,"cog/logger":26}],66:[function(require,module,exports){
+
+},{"./cleanup":68,"./detect":70,"./monitor":73,"async":74,"cog/logger":26}],70:[function(require,module,exports){
 /* jshint node: true */
 'use strict';
 
 /**
-  ## rtc/detect
+  ### rtc/detect
 
   Provide the [rtc-core/detect](https://github.com/rtc-io/rtc-core#detect) 
   functionality.
 **/
 module.exports = require('rtc-core/detect');
-},{"rtc-core/detect":40}],67:[function(require,module,exports){
+},{"rtc-core/detect":59}],71:[function(require,module,exports){
 /* jshint node: true */
 'use strict';
 
@@ -12809,13 +14792,6 @@ var defaults = require('cog/defaults');
 
 var mappings = {
   create: {
-    // data enabler
-    data: function(c) {
-      // if (! detect.moz) {
-      //   c.optional = (c.optional || []).concat({ RtpDataChannels: true });
-      // }
-    },
-
     dtls: function(c) {
       if (! detect.moz) {
         c.optional = (c.optional || []).concat({ DtlsSrtpKeyAgreement: true });
@@ -12824,11 +14800,8 @@ var mappings = {
   }
 };
 
-// initialise known flags
-var knownFlags = ['video', 'audio', 'data'];
-
 /**
-  ## rtc/generators
+  ### rtc/generators
 
   The generators package provides some utility methods for generating
   constraint objects and similar constructs.
@@ -12840,7 +14813,7 @@ var knownFlags = ['video', 'audio', 'data'];
 **/
 
 /**
-  ### generators.config(config)
+  #### generators.config(config)
 
   Generate a configuration object suitable for passing into an W3C
   RTCPeerConnection constructor first argument, based on our custom config.
@@ -12852,7 +14825,7 @@ exports.config = function(config) {
 };
 
 /**
-  ### generators.connectionConstraints(flags, constraints)
+  #### generators.connectionConstraints(flags, constraints)
 
   This is a helper function that will generate appropriate connection
   constraints for a new `RTCPeerConnection` object which is constructed
@@ -12886,33 +14859,7 @@ exports.connectionConstraints = function(flags, constraints) {
 
   return out;
 };
-
-/**
-  ### parseFlags(opts)
-
-  This is a helper function that will extract known flags from a generic
-  options object.
-**/
-var parseFlags = exports.parseFlags = function(options) {
-  // ensure we have opts
-  var opts = options || {};
-
-  // default video and audio flags to true if undefined
-  opts.video = opts.video || typeof opts.video == 'undefined';
-  opts.audio = opts.audio || typeof opts.audio == 'undefined';
-
-  return Object.keys(opts || {})
-    .filter(function(flag) {
-      return opts[flag];
-    })
-    .map(function(flag) {
-      return flag.toLowerCase();
-    })
-    .filter(function(flag) {
-      return knownFlags.indexOf(flag) >= 0;
-    });
-};
-},{"./detect":66,"cog/defaults":23,"cog/logger":26}],68:[function(require,module,exports){
+},{"./detect":70,"cog/defaults":23,"cog/logger":26}],72:[function(require,module,exports){
 /* jshint node: true */
 
 'use strict';
@@ -12925,12 +14872,6 @@ var parseFlags = exports.parseFlags = function(options) {
   a local `RTCPeerConnection` with it's remote counterpart via an
   [rtc-signaller](https://github.com/rtc-io/rtc-signaller) signalling
   channel.
-
-  In most cases, it is recommended that you use one of the higher-level
-  modules that uses the `rtc` module under the hood.  Such as:
-
-  - [rtc-quickconnect](https://github.com/rtc-io/rtc-quickconnect)
-  - [rtc-glue](https://github.com/rtc-io/rtc-glue)
 
   ## Getting Started
 
@@ -12951,6 +14892,8 @@ var parseFlags = exports.parseFlags = function(options) {
   3. Deal with the remote steam being discovered and how to render
      that to the local interface.
 
+  ## Reference
+
 **/
 
 var gen = require('./generators');
@@ -12969,11 +14912,11 @@ exports.RTCPeerConnection = detect('RTCPeerConnection');
 exports.couple = require('./couple');
 
 /**
-  ## Factories
-**/
+  ### rtc.createConnection
 
-/**
-  ### createConnection(opts?, constraints?)
+  ```
+  createConnection(opts?, constraints?) => RTCPeerConnection
+  ```
 
   Create a new `RTCPeerConnection` auto generating default opts as required.
 
@@ -12998,170 +14941,123 @@ exports.createConnection = function(opts, constraints) {
     gen.connectionConstraints(opts, constraints)
   );
 };
-},{"./couple":65,"./detect":66,"./generators":67,"cog/logger":26}],69:[function(require,module,exports){
-(function (process){
+},{"./couple":69,"./detect":70,"./generators":71,"cog/logger":26}],73:[function(require,module,exports){
 /* jshint node: true */
 'use strict';
 
-var debug = require('cog/logger')('monitor');
 var EventEmitter = require('events').EventEmitter;
-var W3C_STATES = {
-  NEW: 'new',
-  LOCAL_OFFER: 'have-local-offer',
-  LOCAL_PRANSWER: 'have-local-pranswer',
-  REMOTE_PRANSWER: 'have-remote-pranswer',
-  ACTIVE: 'active',
-  CLOSED: 'closed'
+
+// define some state mappings to simplify the events we generate
+var stateMappings = {
+  completed: 'connected'
 };
 
+// define the events that we need to watch for peer connection
+// state changes
+var peerStateEvents = [
+  'signalingstatechange',
+  'iceconnectionstatechange',
+];
+
 /**
-  ## rtc/monitor
+  ### rtc/monitor
 
-  In most current implementations of `RTCPeerConnection` it is quite
-  difficult to determine whether a peer connection is active and ready
-  for use or not.  The monitor provides some assistance here by providing
-  a simple function that provides an `EventEmitter` which gives updates
-  on a connections state.
-
-  ### monitor(pc) -> EventEmitter
-
-  ```js
-  var monitor = require('rtc/monitor');
-  var pc = new RTCPeerConnection(config);
-
-  // watch pc and when active do something
-  monitor(pc).once('active', function() {
-    // active and ready to go
-  });
+  ```
+  monitor(pc, targetId, signaller, opts?) => EventEmitter
   ```
 
-  Events provided by the monitor are as follows:
+  The monitor is a useful tool for determining the state of `pc` (an
+  `RTCPeerConnection`) instance in the context of your application. The
+  monitor uses both the `iceConnectionState` information of the peer
+  connection and also the various
+  [signaller events](https://github.com/rtc-io/rtc-signaller#signaller-events)
+  to determine when the connection has been `connected` and when it has
+  been `disconnected`.
 
-  - `active`: triggered when the connection is active and ready for use
-  - `stable`: triggered when the connection is in a stable signalling state
-  - `unstable`: trigger when the connection is renegotiating.
+  A monitor created `EventEmitter` is returned as the result of a
+  [couple](https://github.com/rtc-io/rtc#rtccouple) between a local peer
+  connection and it's remote counterpart.
 
-  It should be noted, that the monitor does a check when it is first passed
-  an `RTCPeerConnection` object to see if the `active` state passes checks.
-  If so, the `active` event will be fired in the next tick.
-
-  If you require a synchronous check of a connection's "openness" then
-  use the `monitor.isActive` test outlined below.
 **/
-var monitor = module.exports = function(pc, tag) {
-  // create a new event emitter which will communicate events
-  var mon = new EventEmitter();
-  var currentState = getState(pc);
-  var isActive = mon.active = currentState === W3C_STATES.ACTIVE;
+module.exports = function(pc, targetId, signaller, opts) {
+  var debugLabel = (opts || {}).debugLabel || 'rtc';
+  var debug = require('cog/logger')(debugLabel + '/monitor');
+  var monitor = new EventEmitter();
+  var state;
 
   function checkState() {
-    var newState = getState(pc, tag);
-    debug('captured state change, new state: ' + newState +
-      ', current state: ' + currentState);
+    var newState = getMappedState(pc.iceConnectionState);
+    debug('state changed: ' + pc.iceConnectionState + ', mapped: ' + newState);
 
-    // update the monitor active flag
-    mon.active = newState === W3C_STATES.ACTIVE;
+    // flag the we had a state change
+    monitor.emit('change', pc);
 
-    // if we have a state change, emit an event for the new state
-    if (newState !== currentState) {
-      mon.emit('change', newState, pc);
-      mon.emit(currentState = newState);
+    // if the active state has changed, then send the appopriate message
+    if (state !== newState) {
+      monitor.emit(newState);
+      state = newState;
     }
   }
 
-  // if the current state is active, trigger the active event
-  if (isActive) {
-    process.nextTick(mon.emit.bind(mon, W3C_STATES.ACTIVE, pc));
+  function handlePeerLeave(peerId) {
+    debug('captured peer leave for peer: ' + peerId);
+
+    // if the peer leaving is not the peer we are connected to
+    // then we aren't interested
+    if (peerId !== targetId) {
+      return;
+    }
+
+    // trigger a closed event
+    monitor.emit('closed');
   }
 
-  // start watching stuff on the pc
-  pc.onsignalingstatechange = checkState;
-  pc.oniceconnectionstatechange = checkState;
+  pc.onclose = monitor.emit.bind(monitor, 'closed');
+  peerStateEvents.forEach(function(evtName) {
+    pc['on' + evtName] = checkState;
+  });
 
-  // patch in a stop method into the emitter
-  mon.stop = function() {
-    pc.onsignalingstatechange = null;
-    pc.oniceconnectionstatechange = null;
+  monitor.stop = function() {
+    pc.onclose = null;
+    peerStateEvents.forEach(function(evtName) {
+      pc['on' + evtName] = null;
+    });
+
+    // remove the peer:leave listener
+    if (signaller && typeof signaller.removeListener == 'function') {
+      signaller.removeListener('peer:leave', handlePeerLeave);
+    }
   };
 
-  return mon;
-};
+  monitor.checkState = checkState;
 
-/**
-  ### monitor.getState(pc)
-
-  Provides a unified state definition for the RTCPeerConnection based
-  on a few checks.
-
-  In emerging versions of the spec we have various properties such as
-  `readyState` that provide a definitive answer on the state of the 
-  connection.  In older versions we need to look at things like
-  `signalingState` and `iceGatheringState` to make an educated guess 
-  as to the connection state.
-**/
-var getState = monitor.getState = function(pc, tag) {
-  var signalingState = pc && pc.signalingState;
-  var iceGatheringState = pc && pc.iceGatheringState;
-  var iceConnectionState = pc && pc.iceConnectionState;
-  var localDesc;
-  var remoteDesc;
-  var state;
-  var isActive;
-
-  // if no connection return closed
+  // if we haven't been provided a valid peer connection, abort
   if (! pc) {
-    return W3C_STATES.CLOSED;
+    return monitor;
   }
 
-  // initialise the tag to an empty string if not provided
-  tag = tag || '';
+  // determine the initial is active state
+  state = getMappedState(pc.iceConnectionState);
 
-  // get the connection local and remote description
-  localDesc = pc.localDescription;
-  remoteDesc = pc.remoteDescription;
-
-  // use the signalling state
-  state = signalingState;
-
-  // if state == 'stable' then investigate
-  if (state === 'stable') {
-    // initialise the state to new
-    state = W3C_STATES.NEW;
-
-    // if we have a local description and remote description flag
-    // as pranswered
-    if (localDesc && remoteDesc) {
-      state = W3C_STATES.REMOTE_PRANSWER;
-    }
+  // if we've been provided a signaller, then watch for peer:leave events
+  if (signaller && typeof signaller.on == 'function') {
+    signaller.on('peer:leave', handlePeerLeave);
   }
 
-  // check to see if we are in the active state
-  isActive = (state === W3C_STATES.REMOTE_PRANSWER) &&
-    (iceConnectionState === 'connected');
+  // if we are active, trigger the connected state
+  // setTimeout(monitor.emit.bind(monitor, state), 0);
 
-  debug(tag + 'signaling state: ' + signalingState +
-    ', iceGatheringState: ' + iceGatheringState +
-    ', iceConnectionState: ' + iceConnectionState);
-  
-  return isActive ? W3C_STATES.ACTIVE : state;
+  return monitor;
 };
 
-/**
-  ### monitor.isActive(pc) -> Boolean
+/* internal helpers */
 
-  Test an `RTCPeerConnection` to see if it's currently open.  The test for
-  "openness" looks at a combination of current `signalingState` and
-  `iceGatheringState`.
-**/
-monitor.isActive = function(pc) {
-  var isStable = pc && pc.signalingState === 'stable';
-
-  // return with the connection is active
-  return isStable && getState(pc) === W3C_STATES.ACTIVE;
-};
-}).call(this,require("/home/doehlman/.bashinate/install/node/0.10.26/lib/node_modules/browserify/node_modules/insert-module-globals/node_modules/process/browser.js"))
-},{"/home/doehlman/.bashinate/install/node/0.10.26/lib/node_modules/browserify/node_modules/insert-module-globals/node_modules/process/browser.js":6,"cog/logger":26,"events":4}],70:[function(require,module,exports){
+function getMappedState(state) {
+  return stateMappings[state] || state;
+}
+},{"cog/logger":26,"events":5}],74:[function(require,module,exports){
 (function (process){
+/*jshint onevar: false, indent:4 */
 /*global setImmediate: false, setTimeout: false, console: false */
 (function () {
 
@@ -13190,6 +15086,12 @@ monitor.isActive = function(pc) {
     }
 
     //// cross-browser compatiblity functions ////
+
+    var _toString = Object.prototype.toString;
+
+    var _isArray = Array.isArray || function (obj) {
+        return _toString.call(obj) === '[object Array]';
+    };
 
     var _each = function (arr, iterator) {
         if (arr.forEach) {
@@ -13272,19 +15174,20 @@ monitor.isActive = function(pc) {
         }
         var completed = 0;
         _each(arr, function (x) {
-            iterator(x, only_once(function (err) {
-                if (err) {
-                    callback(err);
-                    callback = function () {};
-                }
-                else {
-                    completed += 1;
-                    if (completed >= arr.length) {
-                        callback(null);
-                    }
-                }
-            }));
+            iterator(x, only_once(done) );
         });
+        function done(err) {
+          if (err) {
+              callback(err);
+              callback = function () {};
+          }
+          else {
+              completed += 1;
+              if (completed >= arr.length) {
+                  callback();
+              }
+          }
+        }
     };
     async.forEach = async.each;
 
@@ -13303,7 +15206,7 @@ monitor.isActive = function(pc) {
                 else {
                     completed += 1;
                     if (completed >= arr.length) {
-                        callback(null);
+                        callback();
                     }
                     else {
                         iterate();
@@ -13560,8 +15463,9 @@ monitor.isActive = function(pc) {
     async.auto = function (tasks, callback) {
         callback = callback || function () {};
         var keys = _keys(tasks);
-        if (!keys.length) {
-            return callback(null);
+        var remainingTasks = keys.length
+        if (!remainingTasks) {
+            return callback();
         }
 
         var results = {};
@@ -13579,20 +15483,24 @@ monitor.isActive = function(pc) {
             }
         };
         var taskComplete = function () {
+            remainingTasks--
             _each(listeners.slice(0), function (fn) {
                 fn();
             });
         };
 
         addListener(function () {
-            if (_keys(results).length === keys.length) {
-                callback(null, results);
+            if (!remainingTasks) {
+                var theCallback = callback;
+                // prevent final callback from calling itself if it errors
                 callback = function () {};
+
+                theCallback(null, results);
             }
         });
 
         _each(keys, function (k) {
-            var task = (tasks[k] instanceof Function) ? [tasks[k]]: tasks[k];
+            var task = _isArray(tasks[k]) ? tasks[k]: [tasks[k]];
             var taskCallback = function (err) {
                 var args = Array.prototype.slice.call(arguments, 1);
                 if (args.length <= 1) {
@@ -13634,9 +15542,40 @@ monitor.isActive = function(pc) {
         });
     };
 
+    async.retry = function(times, task, callback) {
+        var DEFAULT_TIMES = 5;
+        var attempts = [];
+        // Use defaults if times not passed
+        if (typeof times === 'function') {
+            callback = task;
+            task = times;
+            times = DEFAULT_TIMES;
+        }
+        // Make sure times is a number
+        times = parseInt(times, 10) || DEFAULT_TIMES;
+        var wrappedTask = function(wrappedCallback, wrappedResults) {
+            var retryAttempt = function(task, finalAttempt) {
+                return function(seriesCallback) {
+                    task(function(err, result){
+                        seriesCallback(!err || finalAttempt, {err: err, result: result});
+                    }, wrappedResults);
+                };
+            };
+            while (times) {
+                attempts.push(retryAttempt(task, !(times-=1)));
+            }
+            async.series(attempts, function(done, data){
+                data = data[data.length - 1];
+                (wrappedCallback || callback)(data.err, data.result);
+            });
+        }
+        // If a callback is passed, run this as a controll flow
+        return callback ? wrappedTask() : wrappedTask
+    };
+
     async.waterfall = function (tasks, callback) {
         callback = callback || function () {};
-        if (tasks.constructor !== Array) {
+        if (!_isArray(tasks)) {
           var err = new Error('First argument to waterfall must be an array of functions');
           return callback(err);
         }
@@ -13669,7 +15608,7 @@ monitor.isActive = function(pc) {
 
     var _parallel = function(eachfn, tasks, callback) {
         callback = callback || function () {};
-        if (tasks.constructor === Array) {
+        if (_isArray(tasks)) {
             eachfn.map(tasks, function (fn, callback) {
                 if (fn) {
                     fn(function (err) {
@@ -13709,7 +15648,7 @@ monitor.isActive = function(pc) {
 
     async.series = function (tasks, callback) {
         callback = callback || function () {};
-        if (tasks.constructor === Array) {
+        if (_isArray(tasks)) {
             async.mapSeries(tasks, function (fn, callback) {
                 if (fn) {
                     fn(function (err) {
@@ -13797,7 +15736,8 @@ monitor.isActive = function(pc) {
             if (err) {
                 return callback(err);
             }
-            if (test()) {
+            var args = Array.prototype.slice.call(arguments, 1);
+            if (test.apply(null, args)) {
                 async.doWhilst(iterator, test, callback);
             }
             else {
@@ -13825,7 +15765,8 @@ monitor.isActive = function(pc) {
             if (err) {
                 return callback(err);
             }
-            if (!test()) {
+            var args = Array.prototype.slice.call(arguments, 1);
+            if (!test.apply(null, args)) {
                 async.doUntil(iterator, test, callback);
             }
             else {
@@ -13839,8 +15780,16 @@ monitor.isActive = function(pc) {
             concurrency = 1;
         }
         function _insert(q, data, pos, callback) {
-          if(data.constructor !== Array) {
+          if (!_isArray(data)) {
               data = [data];
+          }
+          if(data.length == 0) {
+             // call drain immediately if there are no tasks
+             return async.setImmediate(function() {
+                 if (q.drain) {
+                     q.drain();
+                 }
+             });
           }
           _each(data, function(task) {
               var item = {
@@ -13854,7 +15803,7 @@ monitor.isActive = function(pc) {
                 q.tasks.push(item);
               }
 
-              if (q.saturated && q.tasks.length === concurrency) {
+              if (q.saturated && q.tasks.length === q.concurrency) {
                   q.saturated();
               }
               async.setImmediate(q.process);
@@ -13868,6 +15817,7 @@ monitor.isActive = function(pc) {
             saturated: null,
             empty: null,
             drain: null,
+            paused: false,
             push: function (data, callback) {
               _insert(q, data, false, callback);
             },
@@ -13875,7 +15825,7 @@ monitor.isActive = function(pc) {
               _insert(q, data, true, callback);
             },
             process: function () {
-                if (workers < q.concurrency && q.tasks.length) {
+                if (!q.paused && workers < q.concurrency && q.tasks.length) {
                     var task = q.tasks.shift();
                     if (q.empty && q.tasks.length === 0) {
                         q.empty();
@@ -13900,6 +15850,19 @@ monitor.isActive = function(pc) {
             },
             running: function () {
                 return workers;
+            },
+            idle: function() {
+                return q.tasks.length + workers === 0;
+            },
+            pause: function () {
+                if (q.paused === true) { return; }
+                q.paused = true;
+                q.process();
+            },
+            resume: function () {
+                if (q.paused === false) { return; }
+                q.paused = false;
+                q.process();
             }
         };
         return q;
@@ -13915,8 +15878,9 @@ monitor.isActive = function(pc) {
             saturated: null,
             empty: null,
             drain: null,
+            drained: true,
             push: function (data, callback) {
-                if(data.constructor !== Array) {
+                if (!_isArray(data)) {
                     data = [data];
                 }
                 _each(data, function(task) {
@@ -13924,6 +15888,7 @@ monitor.isActive = function(pc) {
                         data: task,
                         callback: typeof callback === 'function' ? callback : null
                     });
+                    cargo.drained = false;
                     if (cargo.saturated && tasks.length === payload) {
                         cargo.saturated();
                     }
@@ -13933,13 +15898,14 @@ monitor.isActive = function(pc) {
             process: function process() {
                 if (working) return;
                 if (tasks.length === 0) {
-                    if(cargo.drain) cargo.drain();
+                    if(cargo.drain && !cargo.drained) cargo.drain();
+                    cargo.drained = true;
                     return;
                 }
 
                 var ts = typeof payload === 'number'
                             ? tasks.splice(0, payload)
-                            : tasks.splice(0);
+                            : tasks.splice(0, tasks.length);
 
                 var ds = _map(ts, function (task) {
                     return task.data;
@@ -14007,7 +15973,9 @@ monitor.isActive = function(pc) {
             var callback = args.pop();
             var key = hasher.apply(null, args);
             if (key in memo) {
-                callback.apply(null, memo[key]);
+                async.nextTick(function () {
+                    callback.apply(null, memo[key]);
+                });
             }
             else if (key in queues) {
                 queues[key].push(callback);
@@ -14051,8 +16019,8 @@ monitor.isActive = function(pc) {
         return async.mapSeries(counter, iterator, callback);
     };
 
-    async.compose = function (/* functions... */) {
-        var fns = Array.prototype.reverse.call(arguments);
+    async.seq = function (/* functions... */) {
+        var fns = arguments;
         return function () {
             var that = this;
             var args = Array.prototype.slice.call(arguments);
@@ -14068,6 +16036,10 @@ monitor.isActive = function(pc) {
                 callback.apply(that, [err].concat(results));
             });
         };
+    };
+
+    async.compose = function (/* functions... */) {
+      return async.seq.apply(null, Array.prototype.reverse.call(arguments));
     };
 
     var _applyEach = function (eachfn, fns /*args...*/) {
@@ -14104,15 +16076,15 @@ monitor.isActive = function(pc) {
         next();
     };
 
+    // Node.js
+    if (typeof module !== 'undefined' && module.exports) {
+        module.exports = async;
+    }
     // AMD / RequireJS
-    if (typeof define !== 'undefined' && define.amd) {
+    else if (typeof define !== 'undefined' && define.amd) {
         define([], function () {
             return async;
         });
-    }
-    // Node.js
-    else if (typeof module !== 'undefined' && module.exports) {
-        module.exports = async;
     }
     // included directly via <script> tag
     else {
@@ -14121,8 +16093,8 @@ monitor.isActive = function(pc) {
 
 }());
 
-}).call(this,require("/home/doehlman/.bashinate/install/node/0.10.26/lib/node_modules/browserify/node_modules/insert-module-globals/node_modules/process/browser.js"))
-},{"/home/doehlman/.bashinate/install/node/0.10.26/lib/node_modules/browserify/node_modules/insert-module-globals/node_modules/process/browser.js":6}],71:[function(require,module,exports){
+}).call(this,require("/home/doehlman/code/rtc.io/demo-mesh/node_modules/browserify/node_modules/insert-module-globals/node_modules/process/browser.js"))
+},{"/home/doehlman/code/rtc.io/demo-mesh/node_modules/browserify/node_modules/insert-module-globals/node_modules/process/browser.js":7}],75:[function(require,module,exports){
 (function (global){
 
 var rng;
@@ -14157,7 +16129,7 @@ module.exports = rng;
 
 
 }).call(this,typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{}],72:[function(require,module,exports){
+},{}],76:[function(require,module,exports){
 (function (Buffer){
 //     uuid.js
 //
@@ -14348,4 +16320,4 @@ uuid.BufferClass = BufferClass;
 module.exports = uuid;
 
 }).call(this,require("buffer").Buffer)
-},{"./rng":71,"buffer":1}]},{},[22])
+},{"./rng":75,"buffer":2}]},{},[1])
