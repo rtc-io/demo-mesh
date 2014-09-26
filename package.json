@@ -34,6 +34,6 @@
     "rtc-quickconnect": "^3.0.0"
   },
   "devDependencies": {
-    "browserify": "^3"
+    "browserify": "^5.12.0"
   }
 }
