@@ -4,7 +4,7 @@
 var mesh = require('rtc-mesh');
 var quickconnect = require('rtc-quickconnect');
 var crel = require('crel');
-var uuid = require('uuid');
+var uuid = require('cuid');
 
 // set this to true to update as moving, scaling, rotating events occur
 var canvas;
@@ -25,7 +25,7 @@ function addObject(obj, label) {
   canvas.add(obj);
 
   // tag the object
-  obj._label = label || uuid.v4();
+  obj._label = label || uuid();
 
   // add the object into mesh data
   model.set(obj._label, obj.toJSON());
