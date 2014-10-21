@@ -1,6 +1,6 @@
 {
   "name": "rtcio-demo-mesh",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Demonstrating P2P state synchronization using rtc-mesh",
   "main": "index.js",
   "private": true,
