@@ -127,7 +127,7 @@ if (dynamicUpdates) {
   });
 }
 
-},{"crel":25,"cuid":26,"freeice":27,"rtc-mesh":31,"rtc-quickconnect":42}],2:[function(require,module,exports){
+},{"crel":31,"cuid":32,"freeice":33,"rtc-mesh":37,"rtc-quickconnect":47}],2:[function(require,module,exports){
 /*!
  * The buffer module from node.js, for the browser.
  *
@@ -1763,6 +1763,8 @@ var process = module.exports = {};
 process.nextTick = (function () {
     var canSetImmediate = typeof window !== 'undefined'
     && window.setImmediate;
+    var canMutationObserver = typeof window !== 'undefined'
+    && window.MutationObserver;
     var canPost = typeof window !== 'undefined'
     && window.postMessage && window.addEventListener
     ;
@@ -1771,8 +1773,29 @@ process.nextTick = (function () {
         return function (f) { return window.setImmediate(f) };
     }
 
+    var queue = [];
+
+    if (canMutationObserver) {
+        var hiddenDiv = document.createElement("div");
+        var observer = new MutationObserver(function () {
+            var queueList = queue.slice();
+            queue.length = 0;
+            queueList.forEach(function (fn) {
+                fn();
+            });
+        });
+
+        observer.observe(hiddenDiv, { attributes: true });
+
+        return function nextTick(fn) {
+            if (!queue.length) {
+                hiddenDiv.setAttribute('yes', 'no');
+            }
+            queue.push(fn);
+        };
+    }
+
     if (canPost) {
-        var queue = [];
         window.addEventListener('message', function (ev) {
             var source = ev.source;
             if ((source === window || source === null) && ev.data === 'process-tick') {
@@ -1812,7 +1835,7 @@ process.emit = noop;
 
 process.binding = function (name) {
     throw new Error('process.binding is not supported');
-}
+};
 
 // TODO(shtylman)
 process.cwd = function () { return '/' };
@@ -2950,7 +2973,7 @@ function indexOf (xs, x) {
 }
 
 }).call(this,require('_process'))
-},{"_process":9,"buffer":2,"core-util-is":16,"events":6,"inherits":7,"isarray":8,"stream":22,"string_decoder/":17}],14:[function(require,module,exports){
+},{"_process":9,"buffer":2,"core-util-is":16,"events":6,"inherits":7,"isarray":8,"stream":21,"string_decoder/":22}],14:[function(require,module,exports){
 // Copyright Joyent, Inc. and other Node contributors.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a
@@ -3552,7 +3575,7 @@ function endWritable(stream, state, cb) {
 }
 
 }).call(this,require('_process'))
-},{"./_stream_duplex":11,"_process":9,"buffer":2,"core-util-is":16,"inherits":7,"stream":22}],16:[function(require,module,exports){
+},{"./_stream_duplex":11,"_process":9,"buffer":2,"core-util-is":16,"inherits":7,"stream":21}],16:[function(require,module,exports){
 (function (Buffer){
 // Copyright Joyent, Inc. and other Node contributors.
 //
@@ -3663,6 +3686,153 @@ function objectToString(o) {
 }
 }).call(this,require("buffer").Buffer)
 },{"buffer":2}],17:[function(require,module,exports){
+module.exports = require("./lib/_stream_passthrough.js")
+
+},{"./lib/_stream_passthrough.js":12}],18:[function(require,module,exports){
+require('stream'); // hack to fix a circular dependency issue when used with browserify
+exports = module.exports = require('./lib/_stream_readable.js');
+exports.Readable = exports;
+exports.Writable = require('./lib/_stream_writable.js');
+exports.Duplex = require('./lib/_stream_duplex.js');
+exports.Transform = require('./lib/_stream_transform.js');
+exports.PassThrough = require('./lib/_stream_passthrough.js');
+
+},{"./lib/_stream_duplex.js":11,"./lib/_stream_passthrough.js":12,"./lib/_stream_readable.js":13,"./lib/_stream_transform.js":14,"./lib/_stream_writable.js":15,"stream":21}],19:[function(require,module,exports){
+module.exports = require("./lib/_stream_transform.js")
+
+},{"./lib/_stream_transform.js":14}],20:[function(require,module,exports){
+module.exports = require("./lib/_stream_writable.js")
+
+},{"./lib/_stream_writable.js":15}],21:[function(require,module,exports){
+// Copyright Joyent, Inc. and other Node contributors.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a
+// copy of this software and associated documentation files (the
+// "Software"), to deal in the Software without restriction, including
+// without limitation the rights to use, copy, modify, merge, publish,
+// distribute, sublicense, and/or sell copies of the Software, and to permit
+// persons to whom the Software is furnished to do so, subject to the
+// following conditions:
+//
+// The above copyright notice and this permission notice shall be included
+// in all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+// OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
+// NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+// DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+// OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+// USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+module.exports = Stream;
+
+var EE = require('events').EventEmitter;
+var inherits = require('inherits');
+
+inherits(Stream, EE);
+Stream.Readable = require('readable-stream/readable.js');
+Stream.Writable = require('readable-stream/writable.js');
+Stream.Duplex = require('readable-stream/duplex.js');
+Stream.Transform = require('readable-stream/transform.js');
+Stream.PassThrough = require('readable-stream/passthrough.js');
+
+// Backwards-compat with node 0.4.x
+Stream.Stream = Stream;
+
+
+
+// old-style streams.  Note that the pipe method (the only relevant
+// part of this class) is overridden in the Readable class.
+
+function Stream() {
+  EE.call(this);
+}
+
+Stream.prototype.pipe = function(dest, options) {
+  var source = this;
+
+  function ondata(chunk) {
+    if (dest.writable) {
+      if (false === dest.write(chunk) && source.pause) {
+        source.pause();
+      }
+    }
+  }
+
+  source.on('data', ondata);
+
+  function ondrain() {
+    if (source.readable && source.resume) {
+      source.resume();
+    }
+  }
+
+  dest.on('drain', ondrain);
+
+  // If the 'end' option is not supplied, dest.end() will be called when
+  // source gets the 'end' or 'close' events.  Only dest.end() once.
+  if (!dest._isStdio && (!options || options.end !== false)) {
+    source.on('end', onend);
+    source.on('close', onclose);
+  }
+
+  var didOnEnd = false;
+  function onend() {
+    if (didOnEnd) return;
+    didOnEnd = true;
+
+    dest.end();
+  }
+
+
+  function onclose() {
+    if (didOnEnd) return;
+    didOnEnd = true;
+
+    if (typeof dest.destroy === 'function') dest.destroy();
+  }
+
+  // don't leave dangling pipes when there are errors.
+  function onerror(er) {
+    cleanup();
+    if (EE.listenerCount(this, 'error') === 0) {
+      throw er; // Unhandled stream error in pipe.
+    }
+  }
+
+  source.on('error', onerror);
+  dest.on('error', onerror);
+
+  // remove all the event listeners that were added.
+  function cleanup() {
+    source.removeListener('data', ondata);
+    dest.removeListener('drain', ondrain);
+
+    source.removeListener('end', onend);
+    source.removeListener('close', onclose);
+
+    source.removeListener('error', onerror);
+    dest.removeListener('error', onerror);
+
+    source.removeListener('end', cleanup);
+    source.removeListener('close', cleanup);
+
+    dest.removeListener('close', cleanup);
+  }
+
+  source.on('end', cleanup);
+  source.on('close', cleanup);
+
+  dest.on('close', cleanup);
+
+  dest.emit('pipe', source);
+
+  // Allow for unix-like usage: A.pipe(B).pipe(C)
+  return dest;
+};
+
+},{"events":6,"inherits":7,"readable-stream/duplex.js":10,"readable-stream/passthrough.js":17,"readable-stream/readable.js":18,"readable-stream/transform.js":19,"readable-stream/writable.js":20}],22:[function(require,module,exports){
 // Copyright Joyent, Inc. and other Node contributors.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a
@@ -3885,153 +4055,7 @@ function base64DetectIncompleteChar(buffer) {
   this.charLength = this.charReceived ? 3 : 0;
 }
 
-},{"buffer":2}],18:[function(require,module,exports){
-module.exports = require("./lib/_stream_passthrough.js")
-
-},{"./lib/_stream_passthrough.js":12}],19:[function(require,module,exports){
-exports = module.exports = require('./lib/_stream_readable.js');
-exports.Readable = exports;
-exports.Writable = require('./lib/_stream_writable.js');
-exports.Duplex = require('./lib/_stream_duplex.js');
-exports.Transform = require('./lib/_stream_transform.js');
-exports.PassThrough = require('./lib/_stream_passthrough.js');
-
-},{"./lib/_stream_duplex.js":11,"./lib/_stream_passthrough.js":12,"./lib/_stream_readable.js":13,"./lib/_stream_transform.js":14,"./lib/_stream_writable.js":15}],20:[function(require,module,exports){
-module.exports = require("./lib/_stream_transform.js")
-
-},{"./lib/_stream_transform.js":14}],21:[function(require,module,exports){
-module.exports = require("./lib/_stream_writable.js")
-
-},{"./lib/_stream_writable.js":15}],22:[function(require,module,exports){
-// Copyright Joyent, Inc. and other Node contributors.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a
-// copy of this software and associated documentation files (the
-// "Software"), to deal in the Software without restriction, including
-// without limitation the rights to use, copy, modify, merge, publish,
-// distribute, sublicense, and/or sell copies of the Software, and to permit
-// persons to whom the Software is furnished to do so, subject to the
-// following conditions:
-//
-// The above copyright notice and this permission notice shall be included
-// in all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
-// OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
-// NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
-// DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
-// OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-// USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-module.exports = Stream;
-
-var EE = require('events').EventEmitter;
-var inherits = require('inherits');
-
-inherits(Stream, EE);
-Stream.Readable = require('readable-stream/readable.js');
-Stream.Writable = require('readable-stream/writable.js');
-Stream.Duplex = require('readable-stream/duplex.js');
-Stream.Transform = require('readable-stream/transform.js');
-Stream.PassThrough = require('readable-stream/passthrough.js');
-
-// Backwards-compat with node 0.4.x
-Stream.Stream = Stream;
-
-
-
-// old-style streams.  Note that the pipe method (the only relevant
-// part of this class) is overridden in the Readable class.
-
-function Stream() {
-  EE.call(this);
-}
-
-Stream.prototype.pipe = function(dest, options) {
-  var source = this;
-
-  function ondata(chunk) {
-    if (dest.writable) {
-      if (false === dest.write(chunk) && source.pause) {
-        source.pause();
-      }
-    }
-  }
-
-  source.on('data', ondata);
-
-  function ondrain() {
-    if (source.readable && source.resume) {
-      source.resume();
-    }
-  }
-
-  dest.on('drain', ondrain);
-
-  // If the 'end' option is not supplied, dest.end() will be called when
-  // source gets the 'end' or 'close' events.  Only dest.end() once.
-  if (!dest._isStdio && (!options || options.end !== false)) {
-    source.on('end', onend);
-    source.on('close', onclose);
-  }
-
-  var didOnEnd = false;
-  function onend() {
-    if (didOnEnd) return;
-    didOnEnd = true;
-
-    dest.end();
-  }
-
-
-  function onclose() {
-    if (didOnEnd) return;
-    didOnEnd = true;
-
-    if (typeof dest.destroy === 'function') dest.destroy();
-  }
-
-  // don't leave dangling pipes when there are errors.
-  function onerror(er) {
-    cleanup();
-    if (EE.listenerCount(this, 'error') === 0) {
-      throw er; // Unhandled stream error in pipe.
-    }
-  }
-
-  source.on('error', onerror);
-  dest.on('error', onerror);
-
-  // remove all the event listeners that were added.
-  function cleanup() {
-    source.removeListener('data', ondata);
-    dest.removeListener('drain', ondrain);
-
-    source.removeListener('end', onend);
-    source.removeListener('close', onclose);
-
-    source.removeListener('error', onerror);
-    dest.removeListener('error', onerror);
-
-    source.removeListener('end', cleanup);
-    source.removeListener('close', cleanup);
-
-    dest.removeListener('close', cleanup);
-  }
-
-  source.on('end', cleanup);
-  source.on('close', cleanup);
-
-  dest.on('close', cleanup);
-
-  dest.emit('pipe', source);
-
-  // Allow for unix-like usage: A.pipe(B).pipe(C)
-  return dest;
-};
-
-},{"events":6,"inherits":7,"readable-stream/duplex.js":10,"readable-stream/passthrough.js":18,"readable-stream/readable.js":19,"readable-stream/transform.js":20,"readable-stream/writable.js":21}],23:[function(require,module,exports){
+},{"buffer":2}],23:[function(require,module,exports){
 module.exports = function isBuffer(arg) {
   return arg && typeof arg === 'object'
     && typeof arg.copy === 'function'
@@ -4629,6 +4653,382 @@ function hasOwnProperty(obj, prop) {
 
 }).call(this,require('_process'),typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
 },{"./support/isBuffer":23,"_process":9,"inherits":7}],25:[function(require,module,exports){
+/* jshint node: true */
+'use strict';
+
+/**
+## cog/defaults
+
+```js
+var defaults = require('cog/defaults');
+```
+
+### defaults(target, *)
+
+Shallow copy object properties from the supplied source objects (*) into
+the target object, returning the target object once completed.  Do not,
+however, overwrite existing keys with new values:
+
+```js
+defaults({ a: 1, b: 2 }, { c: 3 }, { d: 4 }, { b: 5 }));
+```
+
+See an example on [requirebin](http://requirebin.com/?gist=6079475).
+**/
+module.exports = function(target) {
+  // ensure we have a target
+  target = target || {};
+
+  // iterate through the sources and copy to the target
+  [].slice.call(arguments, 1).forEach(function(source) {
+    if (! source) {
+      return;
+    }
+
+    for (var prop in source) {
+      if (target[prop] === void 0) {
+        target[prop] = source[prop];
+      }
+    }
+  });
+
+  return target;
+};
+},{}],26:[function(require,module,exports){
+/* jshint node: true */
+'use strict';
+
+/**
+## cog/extend
+
+```js
+var extend = require('cog/extend');
+```
+
+### extend(target, *)
+
+Shallow copy object properties from the supplied source objects (*) into
+the target object, returning the target object once completed:
+
+```js
+extend({ a: 1, b: 2 }, { c: 3 }, { d: 4 }, { b: 5 }));
+```
+
+See an example on [requirebin](http://requirebin.com/?gist=6079475).
+**/
+module.exports = function(target) {
+  [].slice.call(arguments, 1).forEach(function(source) {
+    if (! source) {
+      return;
+    }
+
+    for (var prop in source) {
+      target[prop] = source[prop];
+    }
+  });
+
+  return target;
+};
+},{}],27:[function(require,module,exports){
+/**
+  ## cog/getable
+
+  Take an object and provide a wrapper that allows you to `get` and
+  `set` values on that object.
+
+**/
+module.exports = function(target) {
+  function get(key) {
+    return target[key];
+  }
+
+  function set(key, value) {
+    target[key] = value;
+  }
+
+  function remove(key) {
+    return delete target[key];
+  }
+
+  function keys() {
+    return Object.keys(target);
+  };
+
+  function values() {
+    return Object.keys(target).map(function(key) {
+      return target[key];
+    });
+  };
+
+  if (typeof target != 'object') {
+    return target;
+  }
+
+  return {
+    get: get,
+    set: set,
+    remove: remove,
+    delete: remove,
+    keys: keys,
+    values: values
+  };
+};
+
+},{}],28:[function(require,module,exports){
+/* jshint node: true */
+'use strict';
+
+/**
+  ## cog/jsonparse
+
+  ```js
+  var jsonparse = require('cog/jsonparse');
+  ```
+
+  ### jsonparse(input)
+
+  This function will attempt to automatically detect stringified JSON, and
+  when detected will parse into JSON objects.  The function looks for strings
+  that look and smell like stringified JSON, and if found attempts to
+  `JSON.parse` the input into a valid object.
+
+**/
+module.exports = function(input) {
+  var isString = typeof input == 'string' || (input instanceof String);
+  var reNumeric = /^\-?\d+\.?\d*$/;
+  var shouldParse ;
+  var firstChar;
+  var lastChar;
+
+  if ((! isString) || input.length < 2) {
+    if (isString && reNumeric.test(input)) {
+      return parseFloat(input);
+    }
+
+    return input;
+  }
+
+  // check for true or false
+  if (input === 'true' || input === 'false') {
+    return input === 'true';
+  }
+
+  // check for null
+  if (input === 'null') {
+    return null;
+  }
+
+  // get the first and last characters
+  firstChar = input.charAt(0);
+  lastChar = input.charAt(input.length - 1);
+
+  // determine whether we should JSON.parse the input
+  shouldParse =
+    (firstChar == '{' && lastChar == '}') ||
+    (firstChar == '[' && lastChar == ']') ||
+    (firstChar == '"' && lastChar == '"');
+
+  if (shouldParse) {
+    try {
+      return JSON.parse(input);
+    }
+    catch (e) {
+      // apparently it wasn't valid json, carry on with regular processing
+    }
+  }
+
+
+  return reNumeric.test(input) ? parseFloat(input) : input;
+};
+},{}],29:[function(require,module,exports){
+/* jshint node: true */
+'use strict';
+
+/**
+  ## cog/logger
+
+  ```js
+  var logger = require('cog/logger');
+  ```
+
+  Simple browser logging offering similar functionality to the
+  [debug](https://github.com/visionmedia/debug) module.
+
+  ### Usage
+
+  Create your self a new logging instance and give it a name:
+
+  ```js
+  var debug = logger('phil');
+  ```
+
+  Now do some debugging:
+
+  ```js
+  debug('hello');
+  ```
+
+  At this stage, no log output will be generated because your logger is
+  currently disabled.  Enable it:
+
+  ```js
+  logger.enable('phil');
+  ```
+
+  Now do some more logger:
+
+  ```js
+  debug('Oh this is so much nicer :)');
+  // --> phil: Oh this is some much nicer :)
+  ```
+
+  ### Reference
+**/
+
+var active = [];
+var unleashListeners = [];
+var targets = [ console ];
+
+/**
+  #### logger(name)
+
+  Create a new logging instance.
+**/
+var logger = module.exports = function(name) {
+  // initial enabled check
+  var enabled = checkActive();
+
+  function checkActive() {
+    return enabled = active.indexOf('*') >= 0 || active.indexOf(name) >= 0;
+  }
+
+  // register the check active with the listeners array
+  unleashListeners[unleashListeners.length] = checkActive;
+
+  // return the actual logging function
+  return function() {
+    var args = [].slice.call(arguments);
+
+    // if we have a string message
+    if (typeof args[0] == 'string' || (args[0] instanceof String)) {
+      args[0] = name + ': ' + args[0];
+    }
+
+    // if not enabled, bail
+    if (! enabled) {
+      return;
+    }
+
+    // log
+    targets.forEach(function(target) {
+      target.log.apply(target, args);
+    });
+  };
+};
+
+/**
+  #### logger.reset()
+
+  Reset logging (remove the default console logger, flag all loggers as
+  inactive, etc, etc.
+**/
+logger.reset = function() {
+  // reset targets and active states
+  targets = [];
+  active = [];
+
+  return logger.enable();
+};
+
+/**
+  #### logger.to(target)
+
+  Add a logging target.  The logger must have a `log` method attached.
+
+**/
+logger.to = function(target) {
+  targets = targets.concat(target || []);
+
+  return logger;
+};
+
+/**
+  #### logger.enable(names*)
+
+  Enable logging via the named logging instances.  To enable logging via all
+  instances, you can pass a wildcard:
+
+  ```js
+  logger.enable('*');
+  ```
+
+  __TODO:__ wildcard enablers
+**/
+logger.enable = function() {
+  // update the active
+  active = active.concat([].slice.call(arguments));
+
+  // trigger the unleash listeners
+  unleashListeners.forEach(function(listener) {
+    listener();
+  });
+
+  return logger;
+};
+},{}],30:[function(require,module,exports){
+/* jshint node: true */
+'use strict';
+
+/**
+  ## cog/throttle
+
+  ```js
+  var throttle = require('cog/throttle');
+  ```
+
+  ### throttle(fn, delay, opts)
+
+  A cherry-pickable throttle function.  Used to throttle `fn` to ensure
+  that it can be called at most once every `delay` milliseconds.  Will
+  fire first event immediately, ensuring the next event fired will occur
+  at least `delay` milliseconds after the first, and so on.
+
+**/
+module.exports = function(fn, delay, opts) {
+  var lastExec = (opts || {}).leading !== false ? 0 : Date.now();
+  var trailing = (opts || {}).trailing;
+  var timer;
+  var queuedArgs;
+  var queuedScope;
+
+  // trailing defaults to true
+  trailing = trailing || trailing === undefined;
+  
+  function invokeDefered() {
+    fn.apply(queuedScope, queuedArgs || []);
+    lastExec = Date.now();
+  }
+
+  return function() {
+    var tick = Date.now();
+    var elapsed = tick - lastExec;
+
+    // always clear the defered timer
+    clearTimeout(timer);
+
+    if (elapsed < delay) {
+      queuedArgs = [].slice.call(arguments, 0);
+      queuedScope = this;
+
+      return trailing && (timer = setTimeout(invokeDefered, delay - elapsed));
+    }
+
+    // call the function
+    lastExec = tick;
+    fn.apply(this, arguments);
+  };
+};
+},{}],31:[function(require,module,exports){
 //Copyright (C) 2012 Kory Nunn
 
 //Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
@@ -4771,7 +5171,7 @@ function hasOwnProperty(obj, prop) {
     return crel;
 }));
 
-},{}],26:[function(require,module,exports){
+},{}],32:[function(require,module,exports){
 /**
  * cuid.js
  * Collision-resistant UID generator for browsers and node.
@@ -4883,7 +5283,7 @@ function hasOwnProperty(obj, prop) {
 
 }(this.applitude || this));
 
-},{}],27:[function(require,module,exports){
+},{}],33:[function(require,module,exports){
 /* jshint node: true */
 'use strict';
 
@@ -4983,7 +5383,7 @@ var freeice = module.exports = function(opts) {
   return selected;
 };
 
-},{"./stun.json":29,"./turn.json":30,"normalice":28}],28:[function(require,module,exports){
+},{"./stun.json":35,"./turn.json":36,"normalice":34}],34:[function(require,module,exports){
 /**
   # normalice
 
@@ -5045,7 +5445,7 @@ module.exports = function(input) {
   return output;
 };
 
-},{}],29:[function(require,module,exports){
+},{}],35:[function(require,module,exports){
 module.exports=[
   "stun.l.google.com:19302",
   "stun1.l.google.com:19302",
@@ -5054,10 +5454,8 @@ module.exports=[
   "stun4.l.google.com:19302",
   "stun.ekiga.net",
   "stun.ideasip.com",
-  "stun.iptel.org",
   "stun.rixtelecom.se",
   "stun.schlund.de",
-  "stunserver.org",
   "stun.stunprotocol.org:3478",
   "stun.voiparound.com",
   "stun.voipbuster.com",
@@ -5065,10 +5463,10 @@ module.exports=[
   "stun.voxgratia.org"
 ]
 
-},{}],30:[function(require,module,exports){
+},{}],36:[function(require,module,exports){
 module.exports=[]
 
-},{}],31:[function(require,module,exports){
+},{}],37:[function(require,module,exports){
 /* jshint node: true */
 'use strict';
 
@@ -5208,142 +5606,7 @@ module.exports = function(qc, opts) {
   return model;
 };
 
-},{"cog/logger":32,"rtc-dcstream":33,"scuttlebutt/model":36}],32:[function(require,module,exports){
-/* jshint node: true */
-'use strict';
-
-/**
-  ## cog/logger
-
-  ```js
-  var logger = require('cog/logger');
-  ```
-
-  Simple browser logging offering similar functionality to the
-  [debug](https://github.com/visionmedia/debug) module.
-
-  ### Usage
-
-  Create your self a new logging instance and give it a name:
-
-  ```js
-  var debug = logger('phil');
-  ```
-
-  Now do some debugging:
-
-  ```js
-  debug('hello');
-  ```
-
-  At this stage, no log output will be generated because your logger is
-  currently disabled.  Enable it:
-
-  ```js
-  logger.enable('phil');
-  ```
-
-  Now do some more logger:
-
-  ```js
-  debug('Oh this is so much nicer :)');
-  // --> phil: Oh this is some much nicer :)
-  ```
-
-  ### Reference
-**/
-
-var active = [];
-var unleashListeners = [];
-var targets = [ console ];
-
-/**
-  #### logger(name)
-
-  Create a new logging instance.
-**/
-var logger = module.exports = function(name) {
-  // initial enabled check
-  var enabled = checkActive();
-
-  function checkActive() {
-    return enabled = active.indexOf('*') >= 0 || active.indexOf(name) >= 0;
-  }
-
-  // register the check active with the listeners array
-  unleashListeners[unleashListeners.length] = checkActive;
-
-  // return the actual logging function
-  return function() {
-    var args = [].slice.call(arguments);
-
-    // if we have a string message
-    if (typeof args[0] == 'string' || (args[0] instanceof String)) {
-      args[0] = name + ': ' + args[0];
-    }
-
-    // if not enabled, bail
-    if (! enabled) {
-      return;
-    }
-
-    // log
-    targets.forEach(function(target) {
-      target.log.apply(target, args);
-    });
-  };
-};
-
-/**
-  #### logger.reset()
-
-  Reset logging (remove the default console logger, flag all loggers as
-  inactive, etc, etc.
-**/
-logger.reset = function() {
-  // reset targets and active states
-  targets = [];
-  active = [];
-
-  return logger.enable();
-};
-
-/**
-  #### logger.to(target)
-
-  Add a logging target.  The logger must have a `log` method attached.
-
-**/
-logger.to = function(target) {
-  targets = targets.concat(target || []);
-
-  return logger;
-};
-
-/**
-  #### logger.enable(names*)
-
-  Enable logging via the named logging instances.  To enable logging via all
-  instances, you can pass a wildcard:
-
-  ```js
-  logger.enable('*');
-  ```
-
-  __TODO:__ wildcard enablers
-**/
-logger.enable = function() {
-  // update the active
-  active = active.concat([].slice.call(arguments));
-
-  // trigger the unleash listeners
-  unleashListeners.forEach(function(listener) {
-    listener();
-  });
-
-  return logger;
-};
-},{}],33:[function(require,module,exports){
+},{"cog/logger":29,"rtc-dcstream":38,"scuttlebutt/model":41}],38:[function(require,module,exports){
 (function (Buffer){
 /* jshint node: true */
 'use strict';
@@ -5557,7 +5820,7 @@ function handleChannelOpen(evt) {
 }
 
 }).call(this,require("buffer").Buffer)
-},{"buffer":2,"cog/logger":32,"stream":22,"typedarray-to-buffer":34,"util":24}],34:[function(require,module,exports){
+},{"buffer":2,"cog/logger":29,"stream":21,"typedarray-to-buffer":39,"util":24}],39:[function(require,module,exports){
 (function (Buffer){
 /**
  * Convert a typed array to a Buffer without a copy
@@ -5580,7 +5843,7 @@ module.exports = function (arr) {
 }
 
 }).call(this,require("buffer").Buffer)
-},{"buffer":2}],35:[function(require,module,exports){
+},{"buffer":2}],40:[function(require,module,exports){
 (function (process){
 var EventEmitter = require('events').EventEmitter
 var i = require('iterate')
@@ -5898,7 +6161,7 @@ sb.clone = function () {
 
 
 }).call(this,require('_process'))
-},{"./util":41,"_process":9,"duplex":37,"events":6,"iterate":38,"monotonic-timestamp":39,"stream-serializer":40,"util":24}],36:[function(require,module,exports){
+},{"./util":46,"_process":9,"duplex":42,"events":6,"iterate":43,"monotonic-timestamp":44,"stream-serializer":45,"util":24}],41:[function(require,module,exports){
 var Scuttlebutt = require('./index')
 var inherits = require('util').inherits
 var each = require('iterate').each
@@ -5986,7 +6249,7 @@ m.toJSON = function () {
   return o
 }
 
-},{"./index":35,"./util":41,"iterate":38,"util":24}],37:[function(require,module,exports){
+},{"./index":40,"./util":46,"iterate":43,"util":24}],42:[function(require,module,exports){
 (function (process){
 var Stream = require('stream')
 
@@ -6134,7 +6397,7 @@ module.exports = function (write, end) {
 
 
 }).call(this,require('_process'))
-},{"_process":9,"stream":22}],38:[function(require,module,exports){
+},{"_process":9,"stream":21}],43:[function(require,module,exports){
 
 //
 // adds all the fields from obj2 onto obj1
@@ -6288,7 +6551,7 @@ var join = exports.join = function (A, B, it) {
   })
 }
 
-},{}],39:[function(require,module,exports){
+},{}],44:[function(require,module,exports){
 // If `Date.now()` is invoked twice quickly, it's possible to get two
 // identical time stamps. To avoid generation duplications, subsequent
 // calls are manually ordered to force uniqueness.
@@ -6335,7 +6598,7 @@ function timestamp() {
   return adjusted
 }
 
-},{}],40:[function(require,module,exports){
+},{}],45:[function(require,module,exports){
 
 var EventEmitter = require('events').EventEmitter
 
@@ -6406,7 +6669,7 @@ exports.raw = function (stream) {
 }
 
 
-},{"events":6}],41:[function(require,module,exports){
+},{"events":6}],46:[function(require,module,exports){
 exports.createId = 
 function () {
   return [1,1,1].map(function () {
@@ -6444,7 +6707,7 @@ exports.sort = function (hist) {
   })
 }
 
-},{}],42:[function(require,module,exports){
+},{}],47:[function(require,module,exports){
 (function (process){
 /* jshint node: true */
 'use strict';
@@ -6452,6 +6715,7 @@ exports.sort = function (hist) {
 var rtc = require('rtc-tools');
 var mbus = require('mbus');
 var cleanup = require('rtc-tools/cleanup');
+var detectPlugin = require('rtc-core/plugin');
 var debug = rtc.logger('rtc-quickconnect');
 var defaults = require('cog/defaults');
 var extend = require('cog/extend');
@@ -6564,6 +6828,10 @@ module.exports = function(signalhost, opts) {
   var profile = {};
   var announced = false;
 
+  // initialise iceServers to undefined
+  // we will not announce until these have been properly initialised
+  var iceServers;
+
   // collect the local streams
   var localStreams = [];
 
@@ -6575,6 +6843,8 @@ module.exports = function(signalhost, opts) {
 
   // save the plugins passed to the signaller
   var plugins = signaller.plugins = (opts || {}).plugins || [];
+  var plugin = detectPlugin(signaller.plugins);
+  var pluginReady;
 
   // check how many local streams have been expected (default: 0)
   var expectedLocalStreams = parseInt((opts || {}).expectedLocalStreams, 10) || 0;
@@ -6653,7 +6923,22 @@ module.exports = function(signalhost, opts) {
 
   function checkReadyToAnnounce() {
     clearTimeout(announceTimer);
+    // if we have already announced do nothing!
+    if (announced) {
+      return;
+    }
+
     if (! allowJoin) {
+      return;
+    }
+
+    // if we have a plugin but it's not initialized we aren't ready
+    if (plugin && (! pluginReady)) {
+      return;
+    }
+
+    // if we have no iceServers we aren't ready
+    if (! iceServers) {
       return;
     }
 
@@ -6746,6 +7031,17 @@ module.exports = function(signalhost, opts) {
     }, 500);
   }
 
+  function initPlugin() {
+    return plugin && plugin.init(opts, function(err) {
+      if (err) {
+        return console.error('Could not initialize plugin: ', err);
+      }
+
+      pluginReady = true;
+      checkReadyToAnnounce();
+    });
+  }
+
   function handleLocalAnnounce(data) {
     // if we send an announce with an updated room then update our local room name
     if (data && typeof data.room != 'undefined') {
@@ -6763,7 +7059,12 @@ module.exports = function(signalhost, opts) {
     }
 
     // create a peer connection
-    pc = rtc.createConnection(opts, (opts || {}).constraints);
+    // iceServers that have been created using genice taking precendence
+    pc = rtc.createConnection(
+      extend({}, opts, { iceServers: iceServers }),
+      (opts || {}).constraints
+    );
+
     signaller('peer:connect', data.id, pc, data);
 
     // add this connection to the calls list
@@ -6869,7 +7170,6 @@ module.exports = function(signalhost, opts) {
 
   signaller.on('peer:announce', handlePeerAnnounce);
   signaller.on('peer:update', handlePeerUpdate);
-  signaller.on('peer:leave', callEnd);
 
   /**
     ### Quickconnect Broadcast and Data Channel Helper Functions
@@ -7157,258 +7457,27 @@ module.exports = function(signalhost, opts) {
   // respond to local announce messages
   signaller.on('local:announce', handleLocalAnnounce);
 
-  // check to see if we are ready to announce
-  checkReadyToAnnounce();
+  // use genice to find our iceServers
+  require('rtc-core/genice')(opts, function(err, servers) {
+    if (err) {
+      return console.error('could not find iceServers: ', err);
+    }
+
+    iceServers = servers;
+    checkReadyToAnnounce();
+  });
+
+  // if we plugin is active, then initialize it
+  if (plugin) {
+    initPlugin();
+  }
 
   // pass the signaller on
   return signaller;
 };
 
 }).call(this,require('_process'))
-},{"_process":9,"cog/defaults":43,"cog/extend":44,"cog/getable":45,"mbus":49,"rtc-signaller":55,"rtc-tools":70,"rtc-tools/cleanup":66}],43:[function(require,module,exports){
-/* jshint node: true */
-'use strict';
-
-/**
-## cog/defaults
-
-```js
-var defaults = require('cog/defaults');
-```
-
-### defaults(target, *)
-
-Shallow copy object properties from the supplied source objects (*) into
-the target object, returning the target object once completed.  Do not,
-however, overwrite existing keys with new values:
-
-```js
-defaults({ a: 1, b: 2 }, { c: 3 }, { d: 4 }, { b: 5 }));
-```
-
-See an example on [requirebin](http://requirebin.com/?gist=6079475).
-**/
-module.exports = function(target) {
-  // ensure we have a target
-  target = target || {};
-
-  // iterate through the sources and copy to the target
-  [].slice.call(arguments, 1).forEach(function(source) {
-    if (! source) {
-      return;
-    }
-
-    for (var prop in source) {
-      if (target[prop] === void 0) {
-        target[prop] = source[prop];
-      }
-    }
-  });
-
-  return target;
-};
-},{}],44:[function(require,module,exports){
-/* jshint node: true */
-'use strict';
-
-/**
-## cog/extend
-
-```js
-var extend = require('cog/extend');
-```
-
-### extend(target, *)
-
-Shallow copy object properties from the supplied source objects (*) into
-the target object, returning the target object once completed:
-
-```js
-extend({ a: 1, b: 2 }, { c: 3 }, { d: 4 }, { b: 5 }));
-```
-
-See an example on [requirebin](http://requirebin.com/?gist=6079475).
-**/
-module.exports = function(target) {
-  [].slice.call(arguments, 1).forEach(function(source) {
-    if (! source) {
-      return;
-    }
-
-    for (var prop in source) {
-      target[prop] = source[prop];
-    }
-  });
-
-  return target;
-};
-},{}],45:[function(require,module,exports){
-/**
-  ## cog/getable
-
-  Take an object and provide a wrapper that allows you to `get` and
-  `set` values on that object.
-
-**/
-module.exports = function(target) {
-  function get(key) {
-    return target[key];
-  }
-
-  function set(key, value) {
-    target[key] = value;
-  }
-
-  function remove(key) {
-    return delete target[key];
-  }
-
-  function keys() {
-    return Object.keys(target);
-  };
-
-  function values() {
-    return Object.keys(target).map(function(key) {
-      return target[key];
-    });
-  };
-
-  if (typeof target != 'object') {
-    return target;
-  }
-
-  return {
-    get: get,
-    set: set,
-    remove: remove,
-    delete: remove,
-    keys: keys,
-    values: values
-  };
-};
-
-},{}],46:[function(require,module,exports){
-/* jshint node: true */
-'use strict';
-
-/**
-  ## cog/jsonparse
-
-  ```js
-  var jsonparse = require('cog/jsonparse');
-  ```
-
-  ### jsonparse(input)
-
-  This function will attempt to automatically detect stringified JSON, and
-  when detected will parse into JSON objects.  The function looks for strings
-  that look and smell like stringified JSON, and if found attempts to
-  `JSON.parse` the input into a valid object.
-
-**/
-module.exports = function(input) {
-  var isString = typeof input == 'string' || (input instanceof String);
-  var reNumeric = /^\-?\d+\.?\d*$/;
-  var shouldParse ;
-  var firstChar;
-  var lastChar;
-
-  if ((! isString) || input.length < 2) {
-    if (isString && reNumeric.test(input)) {
-      return parseFloat(input);
-    }
-
-    return input;
-  }
-
-  // check for true or false
-  if (input === 'true' || input === 'false') {
-    return input === 'true';
-  }
-
-  // check for null
-  if (input === 'null') {
-    return null;
-  }
-
-  // get the first and last characters
-  firstChar = input.charAt(0);
-  lastChar = input.charAt(input.length - 1);
-
-  // determine whether we should JSON.parse the input
-  shouldParse =
-    (firstChar == '{' && lastChar == '}') ||
-    (firstChar == '[' && lastChar == ']') ||
-    (firstChar == '"' && lastChar == '"');
-
-  if (shouldParse) {
-    try {
-      return JSON.parse(input);
-    }
-    catch (e) {
-      // apparently it wasn't valid json, carry on with regular processing
-    }
-  }
-
-
-  return reNumeric.test(input) ? parseFloat(input) : input;
-};
-},{}],47:[function(require,module,exports){
-module.exports=require(32)
-},{"/home/doehlman/code/rtc.io/demo-mesh/node_modules/rtc-mesh/node_modules/cog/logger.js":32}],48:[function(require,module,exports){
-/* jshint node: true */
-'use strict';
-
-/**
-  ## cog/throttle
-
-  ```js
-  var throttle = require('cog/throttle');
-  ```
-
-  ### throttle(fn, delay, opts)
-
-  A cherry-pickable throttle function.  Used to throttle `fn` to ensure
-  that it can be called at most once every `delay` milliseconds.  Will
-  fire first event immediately, ensuring the next event fired will occur
-  at least `delay` milliseconds after the first, and so on.
-
-**/
-module.exports = function(fn, delay, opts) {
-  var lastExec = (opts || {}).leading !== false ? 0 : Date.now();
-  var trailing = (opts || {}).trailing;
-  var timer;
-  var queuedArgs;
-  var queuedScope;
-
-  // trailing defaults to true
-  trailing = trailing || trailing === undefined;
-  
-  function invokeDefered() {
-    fn.apply(queuedScope, queuedArgs || []);
-    lastExec = Date.now();
-  }
-
-  return function() {
-    var tick = Date.now();
-    var elapsed = tick - lastExec;
-
-    // always clear the defered timer
-    clearTimeout(timer);
-
-    if (elapsed < delay) {
-      queuedArgs = [].slice.call(arguments, 0);
-      queuedScope = this;
-
-      return trailing && (timer = setTimeout(invokeDefered, delay - elapsed));
-    }
-
-    // call the function
-    lastExec = tick;
-    fn.apply(this, arguments);
-  };
-};
-},{}],49:[function(require,module,exports){
+},{"_process":9,"cog/defaults":25,"cog/extend":26,"cog/getable":27,"mbus":48,"rtc-core/genice":52,"rtc-core/plugin":54,"rtc-signaller":55,"rtc-tools":69,"rtc-tools/cleanup":65}],48:[function(require,module,exports){
 var createTrie = require('array-trie');
 var reDelim = /[\.\:]/;
 
@@ -7515,9 +7584,10 @@ var createBus = module.exports = function(namespace, parent, scope) {
   **/
   function off(name, handler) {
     var handlers = registry.get(getNameParts(name));
+    var idx = handlers ? handlers.indexOf(handler) : -1;
 
-    if (handlers) {
-      handlers.splice(handlers.indexOf(handler), 1);
+    if (idx >= 0) {
+      handlers.splice(idx, 1);
     }
   }
 
@@ -7576,7 +7646,7 @@ var createBus = module.exports = function(namespace, parent, scope) {
   return bus;
 };
 
-},{"array-trie":51}],50:[function(require,module,exports){
+},{"array-trie":50}],49:[function(require,module,exports){
 "use strict"
 
 function compileSearch(funcName, predicate, reversed, extraArgs, useNdarray, earlyOut) {
@@ -7638,7 +7708,7 @@ module.exports = {
   eq: compileBoundsSearch("-", true, "EQ", true)
 }
 
-},{}],51:[function(require,module,exports){
+},{}],50:[function(require,module,exports){
 "use strict"
 
 var bounds = require("binary-search-bounds")
@@ -7726,7 +7796,7 @@ proto.get = function(s) {
 function createTrie() {
   return new Trie([],[])
 }
-},{"binary-search-bounds":50}],52:[function(require,module,exports){
+},{"binary-search-bounds":49}],51:[function(require,module,exports){
 /* jshint node: true */
 /* global window: false */
 /* global navigator: false */
@@ -7799,7 +7869,39 @@ detect.moz = typeof navigator != 'undefined' && !!navigator.mozGetUserMedia;
 detect.browser = browser.name;
 detect.browserVersion = detect.version = browser.version;
 
-},{"detect-browser":53}],53:[function(require,module,exports){
+},{"detect-browser":53}],52:[function(require,module,exports){
+/**
+  ### `rtc-core/genice`
+
+  Respond appropriately to options that are passed to packages like
+  `rtc-quickconnect` and trigger a `callback` (error first) with iceServer
+  values.
+
+  The function looks for either of the following keys in the options, in
+  the following order or precedence:
+
+  1. `ice` - this can either be an array of ice server values or a generator
+     function (in the same format as this function).  If this key contains a
+     value then any servers specified in the `iceServers` key (2) will be
+     ignored.
+
+  2. `iceServers` - an array of ice server values.
+**/
+module.exports = function(opts, callback) {
+  var ice = (opts || {}).ice;
+  var iceServers = (opts || {}).iceServers;
+
+  if (typeof ice == 'function') {
+    return ice(opts, callback);
+  }
+  else if (Array.isArray(ice)) {
+    return callback(null, [].concat(ice));
+  }
+
+  callback(null, [].concat(iceServers || []));
+};
+
+},{}],53:[function(require,module,exports){
 var browsers = [
   [ 'chrome', /Chrom(?:e|ium)\/([0-9\.]+)(:?\s|$)/ ],
   [ 'firefox', /Firefox\/([0-9\.]+)(?:\s|$)/ ],
@@ -7855,21 +7957,22 @@ module.exports = function(plugins) {
   return [].concat(plugins || []).filter(isSupported).filter(isValid)[0];
 }
 
-},{"./detect":52}],55:[function(require,module,exports){
+},{"./detect":51}],55:[function(require,module,exports){
 var extend = require('cog/extend');
 
 module.exports = function(messenger, opts) {
-  return require('./index.js')(messenger, extend({
+  return require('./signaller.js')(messenger, extend({
     connect: require('./primus-loader')
   }, opts));
 };
 
-},{"./index.js":60,"./primus-loader":64,"cog/extend":44}],56:[function(require,module,exports){
+},{"./primus-loader":62,"./signaller.js":64,"cog/extend":26}],56:[function(require,module,exports){
 module.exports = {
   // messenger events
   dataEvent: 'data',
   openEvent: 'open',
   closeEvent: 'close',
+  errorEvent: 'error',
 
   // messenger functions
   writeMethod: 'write',
@@ -7878,6 +7981,7 @@ module.exports = {
   // leave timeout (ms)
   leaveTimeout: 3000
 };
+
 },{}],57:[function(require,module,exports){
 /* jshint node: true */
 'use strict';
@@ -7985,7 +8089,7 @@ module.exports = function(signaller) {
   };
 };
 
-},{"cog/extend":44,"cog/logger":47}],58:[function(require,module,exports){
+},{"cog/extend":26,"cog/logger":29}],58:[function(require,module,exports){
 /* jshint node: true */
 'use strict';
 
@@ -8038,6 +8142,509 @@ module.exports = function(signaller, opts) {
 /* jshint node: true */
 'use strict';
 
+var reVariable = /\{\{\s*([^\}]+?)\s*\}\}/;
+var mods = require('./mods');
+
+/**
+  # formatter
+
+  This is a simple library designed to do one thing and one thing only -
+  replace variables in strings with variable values.  It is built in such a
+  way that the formatter strings are parsed and you are provided with a
+  function than can efficiently be called to provide the custom output.
+
+  ## Example Usage
+
+  <<< examples/likefood.js
+
+  __NOTE__: Formatter is not designed to be a templating library and if
+  you are already using something like Handlebars or
+  [hogan](https://github.com/twitter/hogan.js) in your library or application
+  stack consider using them instead.
+
+  ## Using named variables
+
+  In the examples above we saw how the formatter can be used to replace
+  function arguments in a formatter string.  We can also set up a formatter
+  to use particular key values from an input string instead if that is more
+  suitable:
+
+  <<< examples/likefood-named.js
+
+  ## Nested Property Values
+
+  Since version `0.1.0` you can also access nested property values, as you
+  can with templates like handlebars.
+
+  ## Partial Execution
+
+  Since version `0.3.x` formatter also supports partial execution when using
+  indexed arguments (e.g. `{{ 0 }}`, `{{ 1 }}`, etc).  For example:
+
+  <<< examples/partial.js
+
+  In the case above, the original formatter function returned by `formatter`
+  did not receive enough values to resolve all the required variables.  As
+  such it returned a function ready to accept the remaining values.
+
+  Once all values have been received the output will be generated.
+
+  ## Performance
+
+  I've done some
+  [performance benchmarks](http://jsperf.com/formatter-performance) and
+  formatter is faster than handlebars, but that isn't surprising as it is far
+  simpler and doesn't have the smarts of HBS.  The test is really there to
+  ensure that I didn't do anything too silly...
+
+  Additionally, it should be noted that using formatter is 100% slower than
+  concatenating strings, so don't use it where performance is critical. 
+  Do use it where not repeating yourself is.
+**/
+
+var formatter = module.exports = function(format, opts) {
+  // extract the matches from the string
+  var parts = [];
+  var output = [];
+  var chunk;
+  var varname;
+  var varParts;
+  var match = reVariable.exec(format);
+  var isNumeric;
+  var outputIdx = 0;
+  var ignoreNumeric = (opts || {}).ignoreNumeric;
+
+  while (match) {
+    // get the prematch chunk
+    chunk = format.slice(0, match.index);
+    
+    // if we have a valid chunk, add it to the parts
+    if (chunk) {
+      output[outputIdx++] = chunk;
+    }
+    
+    varParts = match[1].split(/\s*\|\s*/);
+    match[1] = varParts[0];
+    
+    // extract the varname
+    varname = parseInt(match[1], 10);
+    isNumeric = !isNaN(varname);
+
+    // if this is a numeric replacement expression, and we are ignoring
+    // those expressions then pass it through to the output
+    if (ignoreNumeric && isNumeric) {
+      output[outputIdx++] = match[0];
+    }
+    // otherwise, handle normally
+    else {
+      // extract the expression and add it as a function
+      parts[parts.length] = {
+        idx: (outputIdx++),
+        numeric: isNumeric,
+        varname: isNumeric ? varname : match[1],
+        modifiers: varParts.length > 1 ? createModifiers(varParts.slice(1)) : []
+      };
+    }
+
+    // remove this matched chunk and replacer from the string
+    format = format.slice(match.index + match[0].length);
+
+    // check for the next match
+    match = reVariable.exec(format);
+  }
+  
+  // if we still have some of the format string remaining, add it to the list
+  if (format) {
+    output[outputIdx++] = format;
+  }
+
+  return collect(parts, output);
+};
+
+formatter.error = function(message) {
+  // create the format
+  var format = formatter(message);
+  
+  return function(err) {
+    var output;
+    
+    // if no error has been supplied, then pass it straight through
+    if (! err) {
+      return;
+    }
+
+    output = new Error(
+      format.apply(null, Array.prototype.slice.call(arguments, 1)));
+
+    output._original = err;
+
+    // return the new error
+    return output;
+  };
+};
+
+function collect(parts, resolved, indexShift) {
+  // default optionals
+  indexShift = indexShift || 0;
+
+  return function() {
+    var output = [].concat(resolved);
+    var unresolved;
+    var ii;
+    var part;
+    var partIdx;
+    var propNames;
+    var val;
+    var numericResolved = [];
+
+    // find the unresolved parts
+    unresolved = parts.filter(function(part) {
+      return typeof output[part.idx] == 'undefined';
+    });
+
+    // initialise the counter
+    ii = unresolved.length;
+
+    // iterate through the unresolved parts and attempt to resolve the value
+    for (; ii--; ) {
+      part = unresolved[ii];
+
+      if (typeof part == 'object') {
+        // if this is a numeric part, this is a simple index lookup
+        if (part.numeric) {
+          partIdx = part.varname - indexShift;
+          if (arguments.length > partIdx) {
+            output[part.idx] = arguments[partIdx];
+            if (numericResolved.indexOf(part.varname) < 0) {
+              numericResolved[numericResolved.length] = part.varname;
+            }
+          }
+        }
+        // otherwise, we are doing a recursive property search
+        else if (arguments.length > 0) {
+          propNames = (part.varname || '').split('.');
+
+          // initialise the output from the last valid argument
+          output[part.idx] = (arguments[arguments.length - 1] || {});
+          while (output[part.idx] && propNames.length > 0) {
+            val = output[part.idx][propNames.shift()];
+            output[part.idx] = typeof val != 'undefined' ? val : '';
+          }
+        }
+
+        // if the output was resolved, then apply the modifier
+        if (typeof output[part.idx] != 'undefined' && part.modifiers) {
+          output[part.idx] = applyModifiers(part.modifiers, output[part.idx]);
+        }
+      }
+    }
+
+    // reasses unresolved (only caring about numeric parts)
+    unresolved = parts.filter(function(part) {
+      return part.numeric && typeof output[part.idx] == 'undefined';
+    });
+
+    // if we have no unresolved parts, then return the value
+    if (unresolved.length === 0) {
+      return output.join('');
+    }
+
+    // otherwise, return the collect function again
+    return collect(
+      parts,
+      output,
+      indexShift + numericResolved.length
+    );
+  };
+}
+
+function applyModifiers(modifiers, value) {
+  // if we have modifiers, then tweak the output
+  for (var ii = 0, count = modifiers.length; ii < count; ii++) {
+    value = modifiers[ii](value);
+  }
+
+  return value;
+}
+
+function createModifiers(modifierStrings) {
+  var modifiers = [];
+  var parts;
+  var fn;
+  
+  for (var ii = 0, count = modifierStrings.length; ii < count; ii++) {
+    parts = modifierStrings[ii].split(':');
+    fn = mods[parts[0].toLowerCase()];
+    
+    if (fn) {
+      modifiers[modifiers.length] = fn.apply(null, parts.slice(1));
+    }
+  }
+  
+  return modifiers;
+}
+
+},{"./mods":61}],61:[function(require,module,exports){
+/* jshint node: true */
+'use strict';
+
+/**
+  ## Modifiers
+
+**/
+
+/**
+  ### Length Modifier (len)
+
+  The length modifier is used to ensure that a string is exactly the length specified.  The string is sliced to the required max length, and then padded out with spaces (or a specified character) to meet the required length.
+
+  ```js
+  // pad the string test to 10 characters
+  formatter('{{ 0|len:10 }}')('test');   // 'test      '
+
+  // pad the string test to 10 characters, using a as the padding character
+  formatter('{{ 0|len:10:a }}')('test'); // 'testaaaaaa'
+  ```
+**/
+exports.len = function(length, padder) {
+  var testInt = parseInt(padder, 10);
+  var isNumber;
+
+  // default the padder to a space
+  padder = (! isNaN(testInt)) ? testInt : (padder || ' ');
+
+  // check whether we have a number for padding (we will pad left if we do)
+  isNumber = typeof padder == 'number';
+  
+  return function(input) {
+    var output = input.toString().slice(0, length);
+    
+    // pad the string to the required length
+    while (output.length < length) {
+      output = isNumber ? padder + output : output + padder;
+    }
+    
+    return output;
+  };
+};
+},{}],62:[function(require,module,exports){
+/* jshint node: true */
+/* global document, location, Primus: false */
+'use strict';
+
+var reTrailingSlash = /\/$/;
+var formatter = require('formatter');
+var primusUrl = formatter('{{ signalhost }}{{ primusPath }}');
+
+/**
+  ### loadPrimus(signalhost, opts?, callback)
+
+  This is a convenience function that is patched into the signaller to assist
+  with loading the `primus.js` client library from an `rtc-switchboard`
+  signaling server.
+
+  In the case that you wish to load `primus.js` from a location other than
+  the default location of `{{ signalhost }}/rtc.io/primus.js` you can
+  provide an options object which allows for the following customizations:
+
+  - `primusPath` (default: `/rtc.io/primus.js`)
+
+    The path at which the `primus.js` file can be found on the signalhost.
+
+   __NOTE:__ The above options are passed through when creating a
+   signaller object, and thus packages such as
+   [rtc-quickconnect](https://github.com/rtc-io/rtc-quickconnect)
+   will allow you to make the customisation with it's top level
+   options also.
+
+**/
+module.exports = function(signalhost, opts, callback) {
+  var anchor = document.createElement('a');
+  var script;
+  var scriptSrc;
+
+  if (typeof opts == 'function') {
+    callback = opts;
+    opts = {};
+  }
+
+  // initialise the anchor with the signalhost
+  anchor.href = signalhost;
+
+  // initialise the script location
+  scriptSrc = primusUrl({
+    signalhost: signalhost.replace(reTrailingSlash, ''),
+    primusPath: (opts || {}).primusPath || '/rtc.io/primus.js'
+  });
+
+  // look for the script first
+  script = document.querySelector('script[src="' + scriptSrc + '"]');
+
+  // if we found, the script trigger the callback immediately
+  if (script && typeof Primus != 'undefined') {
+    return callback(null, Primus);
+  }
+  // otherwise, if the script exists but Primus is not loaded,
+  // then wait for the load
+  else if (script) {
+    script.addEventListener('load', function() {
+      callback(null, Primus);
+    });
+
+    return;
+  }
+
+  // otherwise create the script and load primus
+  script = document.createElement('script');
+  script.src = scriptSrc;
+
+  script.onerror = callback;
+  script.addEventListener('load', function() {
+    // if we have a signalhost that is not basepathed at /
+    // then tweak the primus prototype
+    if (anchor.pathname !== '/') {
+      Primus.prototype.pathname = anchor.pathname.replace(reTrailingSlash, '') +
+        Primus.prototype.pathname;
+    }
+
+    callback(null, Primus);
+  });
+
+  document.body.appendChild(script);
+};
+
+},{"formatter":60}],63:[function(require,module,exports){
+/* jshint node: true */
+'use strict';
+
+var debug = require('cog/logger')('rtc-signaller');
+var jsonparse = require('cog/jsonparse');
+
+/**
+  ### signaller process handling
+
+  When a signaller's underling messenger emits a `data` event this is
+  delegated to a simple message parser, which applies the following simple
+  logic:
+
+  - Is the message a `/to` message. If so, see if the message is for this
+    signaller (checking the target id - 2nd arg).  If so pass the
+    remainder of the message onto the standard processing chain.  If not,
+    discard the message.
+
+  - Is the message a command message (prefixed with a forward slash). If so,
+    look for an appropriate message handler and pass the message payload on
+    to it.
+
+  - Finally, does the message match any patterns that we are listening for?
+    If so, then pass the entire message contents onto the registered handler.
+**/
+module.exports = function(signaller, opts) {
+  var handlers = require('./handlers')(signaller, opts);
+
+  function sendEvent(parts, srcState, data) {
+    // initialise the event name
+    var evtName = parts[0].slice(1);
+
+    // convert any valid json objects to json
+    var args = parts.slice(2).map(jsonparse);
+
+    signaller.apply(
+      signaller,
+      [evtName].concat(args).concat([srcState, data])
+    );
+  }
+
+  return function(originalData) {
+    var data = originalData;
+    var isMatch = true;
+    var parts;
+    var handler;
+    var srcData;
+    var srcState;
+    var isDirectMessage = false;
+
+    // discard primus messages
+    if (data && data.slice(0, 6) === 'primus') {
+      return;
+    }
+
+    // force the id into string format so we can run length and comparison tests on it
+    var id = signaller.id + '';
+    debug('signaller ' + id + ' received data: ' + originalData);
+
+    // process /to messages
+    if (data.slice(0, 3) === '/to') {
+      isMatch = data.slice(4, id.length + 4) === id;
+      if (isMatch) {
+        parts = data.slice(5 + id.length).split('|').map(jsonparse);
+
+        // get the source data
+        isDirectMessage = true;
+
+        // extract the vector clock and update the parts
+        parts = parts.map(jsonparse);
+      }
+    }
+
+    // if this is not a match, then bail
+    if (! isMatch) {
+      return;
+    }
+
+    // chop the data into parts
+    parts = parts || data.split('|').map(jsonparse);
+
+    // if we have a specific handler for the action, then invoke
+    if (typeof parts[0] == 'string') {
+      // extract the metadata from the input data
+      srcData = parts[1];
+
+      // if we got data from ourself, then this is pretty dumb
+      // but if we have then throw it away
+      if (srcData && srcData.id === signaller.id) {
+        return console.warn('got data from ourself, discarding');
+      }
+
+      // get the source state
+      srcState = signaller.peers.get(srcData && srcData.id) || srcData;
+
+      // handle commands
+      if (parts[0].charAt(0) === '/') {
+        // look for a handler for the message type
+        handler = handlers[parts[0].slice(1)];
+
+        if (typeof handler == 'function') {
+          handler(
+            parts.slice(2),
+            parts[0].slice(1),
+            srcData,
+            srcState,
+            isDirectMessage
+          );
+        }
+        else {
+          sendEvent(parts, srcState, originalData);
+        }
+      }
+      // otherwise, emit data
+      else {
+        signaller(
+          'data',
+          parts.slice(0, 1).concat(parts.slice(2)),
+          srcData,
+          srcState,
+          isDirectMessage
+        );
+      }
+    }
+  };
+};
+
+},{"./handlers":58,"cog/jsonparse":28,"cog/logger":29}],64:[function(require,module,exports){
+/* jshint node: true */
+'use strict';
+
 var debug = require('cog/logger')('rtc-signaller');
 var detect = require('rtc-core/detect');
 var defaults = require('cog/defaults');
@@ -8054,7 +8661,7 @@ var CLOSE_METHODS = ['close', 'end'];
 // initialise signaller metadata so we don't have to include the package.json
 // TODO: make this checkable with some kind of prepublish script
 var metadata = {
-  version: '1.0.0'
+  version: '3.1.0'
 };
 
 /**
@@ -8140,38 +8747,16 @@ module.exports = function(messenger, opts) {
       processor(evt.data);
     });
 
-    messenger.addEventListener('open', function(evt) {
-      connected = true;
-      signaller('open');
-      signaller('connected');
-    });
-
-    messenger.addEventListener('close', function(evt) {
-      connected = false;
-      signaller('disconnected');
-    });
+    messenger.addEventListener('open', handleMessengerOpen);
+    messenger.addEventListener('close', handleMessengerClose);
   }
 
   function bindEvents() {
-    // if we don't have an on function for the messenger, then do nothing
-    if (typeof messenger.on != 'function') {
-      return;
-    }
-
     // handle message data events
     messenger.on(opts.dataEvent, processor);
-
-    // when the connection is open, then emit an open event and a connected event
-    messenger.on(opts.openEvent, function() {
-      connected = true;
-      signaller('open');
-      signaller('connected');
-    });
-
-    messenger.on(opts.closeEvent, function() {
-      connected = false;
-      signaller('disconnected');
-    });
+    messenger.on(opts.openEvent, handleMessengerOpen);
+    messenger.on(opts.closeEvent, handleMessengerClose);
+    messenger.on(opts.errorEvent, handleMessengerClose);
   }
 
   function connectToHost(url) {
@@ -8203,6 +8788,21 @@ module.exports = function(messenger, opts) {
 
   function extractProp(name) {
     return messenger[name];
+  }
+
+  function handleMessengerClose(err) {
+    if (err instanceof Error) {
+      console.log('socket closed with error: ', err);
+    }
+
+    connected = false;
+    signaller('disconnected');
+  }
+
+  function handleMessengerOpen() {
+    connected = true;
+    signaller('open');
+    signaller('connected');
   }
 
   // attempt to detect whether the underlying messenger is closing
@@ -8239,11 +8839,11 @@ module.exports = function(messenger, opts) {
     }
 
     // handle core browser messenging apis
-    if (typeof messenger.addEventListener == 'function') {
-      bindBrowserEvents();
-    }
-    else {
+    if (typeof messenger.on == 'function') {
       bindEvents();
+    }
+    else if (typeof messenger.addEventListener == 'function') {
+      bindBrowserEvents();
     }
 
     // determine if we are connected or not
@@ -8554,507 +9154,7 @@ module.exports = function(messenger, opts) {
   return signaller;
 };
 
-},{"./defaults":56,"./processor":65,"cog/defaults":43,"cog/extend":44,"cog/getable":45,"cog/logger":47,"cog/throttle":48,"cuid":61,"mbus":49,"rtc-core/detect":52}],61:[function(require,module,exports){
-module.exports=require(26)
-},{"/home/doehlman/code/rtc.io/demo-mesh/node_modules/cuid/dist/browser-cuid.js":26}],62:[function(require,module,exports){
-/* jshint node: true */
-'use strict';
-
-var reVariable = /\{\{\s*([^\}]+?)\s*\}\}/;
-var mods = require('./mods');
-
-/**
-  # formatter
-
-  This is a simple library designed to do one thing and one thing only -
-  replace variables in strings with variable values.  It is built in such a
-  way that the formatter strings are parsed and you are provided with a
-  function than can efficiently be called to provide the custom output.
-
-  ## Example Usage
-
-  <<< examples/likefood.js
-
-  __NOTE__: Formatter is not designed to be a templating library and if
-  you are already using something like Handlebars or
-  [hogan](https://github.com/twitter/hogan.js) in your library or application
-  stack consider using them instead.
-
-  ## Using named variables
-
-  In the examples above we saw how the formatter can be used to replace
-  function arguments in a formatter string.  We can also set up a formatter
-  to use particular key values from an input string instead if that is more
-  suitable:
-
-  <<< examples/likefood-named.js
-
-  ## Nested Property Values
-
-  Since version `0.1.0` you can also access nested property values, as you
-  can with templates like handlebars.
-
-  ## Partial Execution
-
-  Since version `0.3.x` formatter also supports partial execution when using
-  indexed arguments (e.g. `{{ 0 }}`, `{{ 1 }}`, etc).  For example:
-
-  <<< examples/partial.js
-
-  In the case above, the original formatter function returned by `formatter`
-  did not receive enough values to resolve all the required variables.  As
-  such it returned a function ready to accept the remaining values.
-
-  Once all values have been received the output will be generated.
-
-  ## Performance
-
-  I've done some
-  [performance benchmarks](http://jsperf.com/formatter-performance) and
-  formatter is faster than handlebars, but that isn't surprising as it is far
-  simpler and doesn't have the smarts of HBS.  The test is really there to
-  ensure that I didn't do anything too silly...
-
-  Additionally, it should be noted that using formatter is 100% slower than
-  concatenating strings, so don't use it where performance is critical. 
-  Do use it where not repeating yourself is.
-**/
-
-var formatter = module.exports = function(format, opts) {
-  // extract the matches from the string
-  var parts = [];
-  var output = [];
-  var chunk;
-  var varname;
-  var varParts;
-  var match = reVariable.exec(format);
-  var isNumeric;
-  var outputIdx = 0;
-  var ignoreNumeric = (opts || {}).ignoreNumeric;
-
-  while (match) {
-    // get the prematch chunk
-    chunk = format.slice(0, match.index);
-    
-    // if we have a valid chunk, add it to the parts
-    if (chunk) {
-      output[outputIdx++] = chunk;
-    }
-    
-    varParts = match[1].split(/\s*\|\s*/);
-    match[1] = varParts[0];
-    
-    // extract the varname
-    varname = parseInt(match[1], 10);
-    isNumeric = !isNaN(varname);
-
-    // if this is a numeric replacement expression, and we are ignoring
-    // those expressions then pass it through to the output
-    if (ignoreNumeric && isNumeric) {
-      output[outputIdx++] = match[0];
-    }
-    // otherwise, handle normally
-    else {
-      // extract the expression and add it as a function
-      parts[parts.length] = {
-        idx: (outputIdx++),
-        numeric: isNumeric,
-        varname: isNumeric ? varname : match[1],
-        modifiers: varParts.length > 1 ? createModifiers(varParts.slice(1)) : []
-      };
-    }
-
-    // remove this matched chunk and replacer from the string
-    format = format.slice(match.index + match[0].length);
-
-    // check for the next match
-    match = reVariable.exec(format);
-  }
-  
-  // if we still have some of the format string remaining, add it to the list
-  if (format) {
-    output[outputIdx++] = format;
-  }
-
-  return collect(parts, output);
-};
-
-formatter.error = function(message) {
-  // create the format
-  var format = formatter(message);
-  
-  return function(err) {
-    var output;
-    
-    // if no error has been supplied, then pass it straight through
-    if (! err) {
-      return;
-    }
-
-    output = new Error(
-      format.apply(null, Array.prototype.slice.call(arguments, 1)));
-
-    output._original = err;
-
-    // return the new error
-    return output;
-  };
-};
-
-function collect(parts, resolved, indexShift) {
-  // default optionals
-  indexShift = indexShift || 0;
-
-  return function() {
-    var output = [].concat(resolved);
-    var unresolved;
-    var ii;
-    var part;
-    var partIdx;
-    var propNames;
-    var val;
-    var numericResolved = [];
-
-    // find the unresolved parts
-    unresolved = parts.filter(function(part) {
-      return typeof output[part.idx] == 'undefined';
-    });
-
-    // initialise the counter
-    ii = unresolved.length;
-
-    // iterate through the unresolved parts and attempt to resolve the value
-    for (; ii--; ) {
-      part = unresolved[ii];
-
-      if (typeof part == 'object') {
-        // if this is a numeric part, this is a simple index lookup
-        if (part.numeric) {
-          partIdx = part.varname - indexShift;
-          if (arguments.length > partIdx) {
-            output[part.idx] = arguments[partIdx];
-            if (numericResolved.indexOf(part.varname) < 0) {
-              numericResolved[numericResolved.length] = part.varname;
-            }
-          }
-        }
-        // otherwise, we are doing a recursive property search
-        else if (arguments.length > 0) {
-          propNames = (part.varname || '').split('.');
-
-          // initialise the output from the last valid argument
-          output[part.idx] = (arguments[arguments.length - 1] || {});
-          while (output[part.idx] && propNames.length > 0) {
-            val = output[part.idx][propNames.shift()];
-            output[part.idx] = typeof val != 'undefined' ? val : '';
-          }
-        }
-
-        // if the output was resolved, then apply the modifier
-        if (typeof output[part.idx] != 'undefined' && part.modifiers) {
-          output[part.idx] = applyModifiers(part.modifiers, output[part.idx]);
-        }
-      }
-    }
-
-    // reasses unresolved (only caring about numeric parts)
-    unresolved = parts.filter(function(part) {
-      return part.numeric && typeof output[part.idx] == 'undefined';
-    });
-
-    // if we have no unresolved parts, then return the value
-    if (unresolved.length === 0) {
-      return output.join('');
-    }
-
-    // otherwise, return the collect function again
-    return collect(
-      parts,
-      output,
-      indexShift + numericResolved.length
-    );
-  };
-}
-
-function applyModifiers(modifiers, value) {
-  // if we have modifiers, then tweak the output
-  for (var ii = 0, count = modifiers.length; ii < count; ii++) {
-    value = modifiers[ii](value);
-  }
-
-  return value;
-}
-
-function createModifiers(modifierStrings) {
-  var modifiers = [];
-  var parts;
-  var fn;
-  
-  for (var ii = 0, count = modifierStrings.length; ii < count; ii++) {
-    parts = modifierStrings[ii].split(':');
-    fn = mods[parts[0].toLowerCase()];
-    
-    if (fn) {
-      modifiers[modifiers.length] = fn.apply(null, parts.slice(1));
-    }
-  }
-  
-  return modifiers;
-}
-
-},{"./mods":63}],63:[function(require,module,exports){
-/* jshint node: true */
-'use strict';
-
-/**
-  ## Modifiers
-
-**/
-
-/**
-  ### Length Modifier (len)
-
-  The length modifier is used to ensure that a string is exactly the length specified.  The string is sliced to the required max length, and then padded out with spaces (or a specified character) to meet the required length.
-
-  ```js
-  // pad the string test to 10 characters
-  formatter('{{ 0|len:10 }}')('test');   // 'test      '
-
-  // pad the string test to 10 characters, using a as the padding character
-  formatter('{{ 0|len:10:a }}')('test'); // 'testaaaaaa'
-  ```
-**/
-exports.len = function(length, padder) {
-  var testInt = parseInt(padder, 10);
-  var isNumber;
-
-  // default the padder to a space
-  padder = (! isNaN(testInt)) ? testInt : (padder || ' ');
-
-  // check whether we have a number for padding (we will pad left if we do)
-  isNumber = typeof padder == 'number';
-  
-  return function(input) {
-    var output = input.toString().slice(0, length);
-    
-    // pad the string to the required length
-    while (output.length < length) {
-      output = isNumber ? padder + output : output + padder;
-    }
-    
-    return output;
-  };
-};
-},{}],64:[function(require,module,exports){
-/* jshint node: true */
-/* global document, location, Primus: false */
-'use strict';
-
-var reTrailingSlash = /\/$/;
-var formatter = require('formatter');
-var primusUrl = formatter('{{ signalhost }}{{ primusPath }}');
-
-/**
-  ### loadPrimus(signalhost, opts?, callback)
-
-  This is a convenience function that is patched into the signaller to assist
-  with loading the `primus.js` client library from an `rtc-switchboard`
-  signaling server.
-
-  In the case that you wish to load `primus.js` from a location other than
-  the default location of `{{ signalhost }}/rtc.io/primus.js` you can
-  provide an options object which allows for the following customizations:
-
-  - `primusPath` (default: `/rtc.io/primus.js`)
-
-    The path at which the `primus.js` file can be found on the signalhost.
-
-   __NOTE:__ The above options are passed through when creating a
-   signaller object, and thus packages such as
-   [rtc-quickconnect](https://github.com/rtc-io/rtc-quickconnect)
-   will allow you to make the customisation with it's top level
-   options also.
-
-**/
-module.exports = function(signalhost, opts, callback) {
-  var anchor = document.createElement('a');
-  var script;
-  var scriptSrc;
-
-  if (typeof opts == 'function') {
-    callback = opts;
-    opts = {};
-  }
-
-  // initialise the anchor with the signalhost
-  anchor.href = signalhost;
-
-  // initialise the script location
-  scriptSrc = primusUrl({
-    signalhost: signalhost.replace(reTrailingSlash, ''),
-    primusPath: (opts || {}).primusPath || '/rtc.io/primus.js'
-  });
-
-  // look for the script first
-  script = document.querySelector('script[src="' + scriptSrc + '"]');
-
-  // if we found, the script trigger the callback immediately
-  if (script && typeof Primus != 'undefined') {
-    return callback(null, Primus);
-  }
-  // otherwise, if the script exists but Primus is not loaded,
-  // then wait for the load
-  else if (script) {
-    script.addEventListener('load', function() {
-      callback(null, Primus);
-    });
-
-    return;
-  }
-
-  // otherwise create the script and load primus
-  script = document.createElement('script');
-  script.src = scriptSrc;
-
-  script.onerror = callback;
-  script.addEventListener('load', function() {
-    // if we have a signalhost that is not basepathed at /
-    // then tweak the primus prototype
-    if (anchor.pathname !== '/') {
-      Primus.prototype.pathname = anchor.pathname.replace(reTrailingSlash, '') +
-        Primus.prototype.pathname;
-    }
-
-    callback(null, Primus);
-  });
-
-  document.body.appendChild(script);
-};
-
-},{"formatter":62}],65:[function(require,module,exports){
-/* jshint node: true */
-'use strict';
-
-var debug = require('cog/logger')('rtc-signaller');
-var jsonparse = require('cog/jsonparse');
-
-/**
-  ### signaller process handling
-
-  When a signaller's underling messenger emits a `data` event this is
-  delegated to a simple message parser, which applies the following simple
-  logic:
-
-  - Is the message a `/to` message. If so, see if the message is for this
-    signaller (checking the target id - 2nd arg).  If so pass the
-    remainder of the message onto the standard processing chain.  If not,
-    discard the message.
-
-  - Is the message a command message (prefixed with a forward slash). If so,
-    look for an appropriate message handler and pass the message payload on
-    to it.
-
-  - Finally, does the message match any patterns that we are listening for?
-    If so, then pass the entire message contents onto the registered handler.
-**/
-module.exports = function(signaller, opts) {
-  var handlers = require('./handlers')(signaller, opts);
-
-  function sendEvent(parts, srcState, data) {
-    // initialise the event name
-    var evtName = parts[0].slice(1);
-
-    // convert any valid json objects to json
-    var args = parts.slice(2).map(jsonparse);
-
-    signaller.apply(
-      signaller,
-      [evtName].concat(args).concat([srcState, data])
-    );
-  }
-
-  return function(originalData) {
-    var data = originalData;
-    var isMatch = true;
-    var parts;
-    var handler;
-    var srcData;
-    var srcState;
-    var isDirectMessage = false;
-
-    // force the id into string format so we can run length and comparison tests on it
-    var id = signaller.id + '';
-    debug('signaller ' + id + ' received data: ' + originalData);
-
-    // process /to messages
-    if (data.slice(0, 3) === '/to') {
-      isMatch = data.slice(4, id.length + 4) === id;
-      if (isMatch) {
-        parts = data.slice(5 + id.length).split('|').map(jsonparse);
-
-        // get the source data
-        isDirectMessage = true;
-
-        // extract the vector clock and update the parts
-        parts = parts.map(jsonparse);
-      }
-    }
-
-    // if this is not a match, then bail
-    if (! isMatch) {
-      return;
-    }
-
-    // chop the data into parts
-    parts = parts || data.split('|').map(jsonparse);
-
-    // if we have a specific handler for the action, then invoke
-    if (typeof parts[0] == 'string') {
-      // extract the metadata from the input data
-      srcData = parts[1];
-
-      // if we got data from ourself, then this is pretty dumb
-      // but if we have then throw it away
-      if (srcData && srcData.id === signaller.id) {
-        return console.warn('got data from ourself, discarding');
-      }
-
-      // get the source state
-      srcState = signaller.peers.get(srcData && srcData.id) || srcData;
-
-      // handle commands
-      if (parts[0].charAt(0) === '/') {
-        // look for a handler for the message type
-        handler = handlers[parts[0].slice(1)];
-
-        if (typeof handler == 'function') {
-          handler(
-            parts.slice(2),
-            parts[0].slice(1),
-            srcData,
-            srcState,
-            isDirectMessage
-          );
-        }
-        else {
-          sendEvent(parts, srcState, originalData);
-        }
-      }
-      // otherwise, emit data
-      else {
-        signaller(
-          'data',
-          parts.slice(0, 1).concat(parts.slice(2)),
-          srcData,
-          srcState,
-          isDirectMessage
-        );
-      }
-    }
-  };
-};
-
-},{"./handlers":58,"cog/jsonparse":46,"cog/logger":47}],66:[function(require,module,exports){
+},{"./defaults":56,"./processor":63,"cog/defaults":25,"cog/extend":26,"cog/getable":27,"cog/logger":29,"cog/throttle":30,"cuid":32,"mbus":48,"rtc-core/detect":51}],65:[function(require,module,exports){
 /* jshint node: true */
 'use strict';
 
@@ -9117,7 +9217,7 @@ module.exports = function(pc) {
   }, 100);
 };
 
-},{"cog/logger":47}],67:[function(require,module,exports){
+},{"cog/logger":29}],66:[function(require,module,exports){
 /* jshint node: true */
 'use strict';
 
@@ -9125,18 +9225,8 @@ var mbus = require('mbus');
 var queue = require('rtc-taskqueue');
 var cleanup = require('./cleanup');
 var monitor = require('./monitor');
-var detect = require('./detect');
-var findPlugin = require('rtc-core/plugin');
+var throttle = require('cog/throttle');
 var CLOSED_STATES = [ 'closed', 'failed' ];
-
-// track the various supported CreateOffer / CreateAnswer contraints
-// that we recognize and allow
-var OFFER_ANSWER_CONSTRAINTS = [
-  'offerToReceiveVideo',
-  'offerToReceiveAudio',
-  'voiceActivityDetection',
-  'iceRestart'
-];
 
 /**
   ### rtc-tools/couple
@@ -9182,12 +9272,8 @@ function couple(pc, targetId, signaller, opts) {
   // create a monitor for the connection
   var mon = monitor(pc, targetId, signaller, (opts || {}).logger);
   var emit = mbus('', mon);
-  var queuedCandidates = [];
-  var sdpFilter = (opts || {}).sdpfilter;
   var reactive = (opts || {}).reactive;
-  var offerTimeout;
   var endOfCandidates = true;
-  var plugin = findPlugin((opts || {}).plugins);
 
   // configure the time to wait between receiving a 'disconnect'
   // iceConnectionState and determining that we are closed
@@ -9200,19 +9286,15 @@ function couple(pc, targetId, signaller, opts) {
   // initialise the processing queue (one at a time please)
   var q = queue(pc, opts);
 
-  function createOrRequestOffer() {
+  var createOrRequestOffer = throttle(function() {
     if (! isMaster) {
       return signaller.to(targetId).send('/negotiate');
     }
 
     q.createOffer();
-  }
+  }, 100, { leading: false });
 
-  function debounceOffer() {
-    debug('debouncing offer');
-    clearTimeout(offerTimeout);
-    offerTimeout = setTimeout(q.createOffer, 50);
-  }
+  var debounceOffer = throttle(q.createOffer, 100, { leading: false });
 
   function decouple() {
     debug('decoupling ' + signaller.id + ' from ' + targetId);
@@ -9228,49 +9310,6 @@ function couple(pc, targetId, signaller, opts) {
     signaller.removeListener('sdp', handleSdp);
     signaller.removeListener('candidate', handleCandidate);
     signaller.removeListener('negotiate', handleNegotiateRequest);
-  }
-
-  function generateConstraints(methodName) {
-    var constraints = {};
-
-    function reformatConstraints() {
-      var tweaked = {};
-
-      Object.keys(constraints).forEach(function(param) {
-        var sentencedCased = param.charAt(0).toUpperCase() + param.substr(1);
-        tweaked[sentencedCased] = constraints[param];
-      });
-
-      // update the constraints to match the expected format
-      constraints = {
-        mandatory: tweaked
-      };
-    }
-
-    // TODO: customize behaviour based on offer vs answer
-
-    // pull out any valid
-    OFFER_ANSWER_CONSTRAINTS.forEach(function(param) {
-      var sentencedCased = param.charAt(0).toUpperCase() + param.substr(1);
-
-      // if we have no opts, do nothing
-      if (! opts) {
-        return;
-      }
-      // if the parameter has been defined, then add it to the constraints
-      else if (opts[param] !== undefined) {
-        constraints[param] = opts[param];
-      }
-      // if the sentenced cased version has been added, then use that
-      else if (opts[sentencedCased] !== undefined) {
-        constraints[param] = opts[sentencedCased];
-      }
-    });
-
-    // TODO: only do this for the older browsers that require it
-    reformatConstraints();
-
-    return constraints;
   }
 
   function handleCandidate(data) {
@@ -9315,14 +9354,24 @@ function couple(pc, targetId, signaller, opts) {
     }
 
     mon.once('disconnect', handleDisconnect);
-  };
+  }
 
   function handleLocalCandidate(evt) {
+    var data;
+
     if (evt.candidate) {
       resetDisconnectTimer();
 
-      emit('ice.local', evt.candidate);
-      signaller.to(targetId).send('/candidate', evt.candidate);
+      // formulate into a specific data object so we won't be upset by plugin
+      // specific implementations of the candidate data format (i.e. extra fields)
+      data = {
+        candidate: evt.candidate.candidate,
+        sdpMid: evt.candidate.sdpMid,
+        sdpMLineIndex: evt.candidate.sdpMLineIndex
+      };
+
+      emit('ice.local', data);
+      signaller.to(targetId).send('/candidate', data);
       endOfCandidates = false;
     }
     else if (! endOfCandidates) {
@@ -9383,7 +9432,7 @@ function couple(pc, targetId, signaller, opts) {
 
 module.exports = couple;
 
-},{"./cleanup":66,"./detect":68,"./monitor":71,"cog/logger":47,"mbus":49,"rtc-core/plugin":54,"rtc-taskqueue":72}],68:[function(require,module,exports){
+},{"./cleanup":65,"./monitor":70,"cog/logger":29,"cog/throttle":30,"mbus":48,"rtc-taskqueue":71}],67:[function(require,module,exports){
 /* jshint node: true */
 'use strict';
 
@@ -9395,7 +9444,7 @@ module.exports = couple;
 **/
 module.exports = require('rtc-core/detect');
 
-},{"rtc-core/detect":52}],69:[function(require,module,exports){
+},{"rtc-core/detect":51}],68:[function(require,module,exports){
 /* jshint node: true */
 'use strict';
 
@@ -9439,10 +9488,6 @@ var mappings = {
   If you pass in both a generator and iceServers, the iceServers _will be
   ignored and the generator used instead.
 **/
-
-var iceServerGenerator = function () {
-  return [];
-}
 
 exports.config = function(config) {
   var iceServerGenerator = (config || {}).iceServerGenerator;
@@ -9488,7 +9533,7 @@ exports.connectionConstraints = function(flags, constraints) {
   return out;
 };
 
-},{"./detect":68,"cog/defaults":43,"cog/logger":47}],70:[function(require,module,exports){
+},{"./detect":67,"cog/defaults":25,"cog/logger":29}],69:[function(require,module,exports){
 /* jshint node: true */
 
 'use strict';
@@ -9564,24 +9609,22 @@ exports.couple = require('./couple');
 **/
 exports.createConnection = function(opts, constraints) {
   var plugin = findPlugin((opts || {}).plugins);
+  var PeerConnection = (opts || {}).RTCPeerConnection || RTCPeerConnection;
 
   // generate the config based on options provided
   var config = gen.config(opts);
 
   // generate appropriate connection constraints
-  var constraints = gen.connectionConstraints(opts, constraints);
+  constraints = gen.connectionConstraints(opts, constraints);
 
   if (plugin && typeof plugin.createConnection == 'function') {
     return plugin.createConnection(config, constraints);
   }
-  else {
-    return new ((opts || {}).RTCPeerConnection || RTCPeerConnection)(
-      config, constraints
-    );
-  }
+
+  return new PeerConnection(config, constraints);
 };
 
-},{"./couple":67,"./detect":68,"./generators":69,"cog/logger":47,"rtc-core/plugin":54}],71:[function(require,module,exports){
+},{"./couple":66,"./detect":67,"./generators":68,"cog/logger":29,"rtc-core/plugin":54}],70:[function(require,module,exports){
 /* jshint node: true */
 'use strict';
 
@@ -9651,15 +9694,15 @@ module.exports = function(pc, targetId, signaller, parentBus) {
     monitor('closed');
   }
 
-  pc.addEventListener('close', handleClose);
+  pc.onclose = handleClose;
   peerStateEvents.forEach(function(evtName) {
-    pc.addEventListener(evtName, checkState);
+    pc['on' + evtName] = checkState;
   });
 
   monitor.stop = function() {
-    pc.removeEventListener('close', handleClose);
+    pc.onclose = null;
     peerStateEvents.forEach(function(evtName) {
-      pc.removeEventListener(evtName, checkState);
+      pc['on' + evtName] = null;
     });
 
     // remove the peer:leave listener
@@ -9692,9 +9735,8 @@ function getMappedState(state) {
   return stateMappings[state] || state;
 }
 
-},{"mbus":49}],72:[function(require,module,exports){
+},{"mbus":48}],71:[function(require,module,exports){
 var detect = require('rtc-core/detect');
-var zip = require('whisk/zip');
 var findPlugin = require('rtc-core/plugin');
 var PriorityQueue = require('priorityqueuejs');
 
@@ -9724,6 +9766,9 @@ var METHOD_EVENTS = {
   createAnswer: 'answer'
 };
 
+// define states in which we will attempt to finalize a connection on receiving a remote offer
+var VALID_RESPONSE_STATES = ['have-remote-offer', 'have-local-pranswer'];
+
 /**
   # rtc-taskqueue
 
@@ -9750,6 +9795,9 @@ module.exports = function(pc, opts) {
   var checkQueueTimer = 0;
   var currentTask;
   var defaultFail = tq.bind(tq, 'fail');
+
+  // look for an sdpfilter function (allow slight mis-spellings)
+  var sdpFilter = (opts || {}).sdpfilter || (opts || {}).sdpFilter;
 
   // initialise session description and icecandidate objects
   var RTCSessionDescription = (opts || {}).RTCSessionDescription ||
@@ -9790,11 +9838,12 @@ module.exports = function(pc, opts) {
     var ready = next && testReady(next);
     var retry = (! queue.isEmpty()) && isNotClosed(pc);
 
-//     debug('checking queue: ', currentTask, next && next.name, ready);
+    // reset the queue timer
+    checkQueueTimer = 0;
 
     // if we don't have a task ready, then abort
     if (! ready) {
-      return retry && triggerQueueCheck(100);
+      return retry && triggerQueueCheck();
     }
 
     // update the current task (dequeue)
@@ -9806,9 +9855,6 @@ module.exports = function(pc, opts) {
       var pass = currentTask.pass;
       var taskName = currentTask.name;
 
-      // unset the current task
-      currentTask = null;
-
       // if errored, fail
       if (err) {
         console.error(taskName + ' task failed: ', err);
@@ -9816,10 +9862,13 @@ module.exports = function(pc, opts) {
       }
 
       if (typeof pass == 'function') {
-        pass.apply(null, [].slice.call(arguments, 1));
+        pass.apply(currentTask, [].slice.call(arguments, 1));
       }
 
-      triggerQueueCheck();
+      setTimeout(function() {
+        currentTask = null;
+        triggerQueueCheck();
+      }, 0);
     });
   }
 
@@ -9834,11 +9883,16 @@ module.exports = function(pc, opts) {
       desc.sdp = sdp;
     }
 
+    // if a filter has been specified, then apply the filter
+    if (typeof sdpFilter == 'function') {
+      desc.sdp = sdpFilter(desc.sdp, pc, methodName);
+    }
+
     return desc;
   }
 
   function completeConnection() {
-    if (pc.signalingState === 'have-remote-offer') {
+    if (VALID_RESPONSE_STATES.indexOf(pc.signalingState) >= 0) {
       return tq.createAnswer();
     }
   }
@@ -9859,8 +9913,8 @@ module.exports = function(pc, opts) {
     return new RTCSessionDescription(data);
   }
 
-  function emitSdp(sdp) {
-    tq('sdp.local', pc.localDescription);
+  function emitSdp() {
+    tq('sdp.local', this.args[0]);
   }
 
   function enqueue(name, handler, opts) {
@@ -9892,6 +9946,8 @@ module.exports = function(pc, opts) {
   function execMethod(task, next) {
     var fn = pc[task.name];
     var eventName = METHOD_EVENTS[task.name] || (task.name || '').toLowerCase();
+    var cbArgs = [ success, fail ];
+    var isOffer = task.name === 'createOffer';
 
     function fail(err) {
       tq.apply(tq, [ 'negotiate.error', task.name, err ].concat(task.args));
@@ -9909,7 +9965,10 @@ module.exports = function(pc, opts) {
 
     // invoke the function
     tq.apply(tq, ['negotiate.' + eventName].concat(task.args));
-    fn.apply(pc, task.args.concat([ success, fail ]));
+    fn.apply(
+      pc,
+      task.args.concat(cbArgs).concat(isOffer ? generateConstraints() : [])
+    );
   }
 
   function extractCandidateEventData(data) {
@@ -9921,8 +9980,31 @@ module.exports = function(pc, opts) {
     return data;
   }
 
+  function generateConstraints() {
+    var allowedKeys = {
+      offertoreceivevideo: 'OfferToReceiveVideo',
+      offertoreceiveaudio: 'OfferToReceiveAudio',
+      icerestart: 'IceRestart',
+      voiceactivitydetection: 'VoiceActivityDetection'
+    };
+
+    var constraints = {
+      OfferToReceiveVideo: true,
+      OfferToReceiveAudio: true
+    };
+
+    // update known keys to match
+    Object.keys(opts || {}).forEach(function(key) {
+      if (allowedKeys[key.toLowerCase]) {
+        constraints[allowedKeys[key.toLowerCase()]] = opts[key];
+      }
+    });
+
+    return { mandatory: constraints };
+  }
+
   function hasLocalOrRemoteDesc(pc, task) {
-    return pc.localDescription !== null || pc.remoteDescription !== null;
+    return pc.__hasDesc || (pc.__hasDesc = !!pc.remoteDescription);
   }
 
   function isNotNegotiating(pc) {
@@ -9938,17 +10020,19 @@ module.exports = function(pc, opts) {
   }
 
   function isValidCandidate(pc, data) {
-    return checkCandidate(data.args[0]).length === 0;
+    return data.__valid ||
+      (data.__valid = checkCandidate(data.args[0]).length === 0);
   }
 
   function orderTasks(a, b) {
     // apply each of the checks for each task
     var tasks = [a,b];
     var readiness = tasks.map(testReady);
-    var taskPriorities = tasks.map(zip(readiness)).map(function(args) {
-      var priority = priorities.indexOf(args[0].name);
+    var taskPriorities = tasks.map(function(task, idx) {
+      var ready = readiness[idx];
+      var priority = ready && priorities.indexOf(task.name);
 
-      return args[1] ? (priority >= 0 ? priority : PRIORITY_LOW) : PRIORITY_WAIT;
+      return ready ? (priority >= 0 ? priority : PRIORITY_LOW) : PRIORITY_WAIT;
     });
 
     return taskPriorities[1] - taskPriorities[0];
@@ -9961,9 +10045,9 @@ module.exports = function(pc, opts) {
     }, true);
   }
 
-  function triggerQueueCheck(wait) {
-    clearTimeout(checkQueueTimer);
-    checkQueueTimer = setTimeout(checkQueue, wait || 5);
+  function triggerQueueCheck() {
+    if (checkQueueTimer) return;
+    checkQueueTimer = setTimeout(checkQueue, 50);
   }
 
   // patch in the queue helper methods
@@ -9994,7 +10078,7 @@ module.exports = function(pc, opts) {
   return tq;
 };
 
-},{"mbus":49,"priorityqueuejs":73,"rtc-core/detect":52,"rtc-core/plugin":54,"rtc-sdpclean":74,"rtc-validator/candidate":75,"whisk/zip":76}],73:[function(require,module,exports){
+},{"mbus":48,"priorityqueuejs":72,"rtc-core/detect":51,"rtc-core/plugin":54,"rtc-sdpclean":73,"rtc-validator/candidate":74}],72:[function(require,module,exports){
 /**
  * Expose `PriorityQueue`.
  */
@@ -10168,7 +10252,7 @@ PriorityQueue.prototype._swap = function(a, b) {
   this._elements[b] = aux;
 };
 
-},{}],74:[function(require,module,exports){
+},{}],73:[function(require,module,exports){
 var validators = [
   [ /^(a\=candidate.*)$/, require('rtc-validator/candidate') ]
 ];
@@ -10225,7 +10309,7 @@ function detectLineBreak(input) {
   return match && match[0];
 }
 
-},{"rtc-validator/candidate":75}],75:[function(require,module,exports){
+},{"rtc-validator/candidate":74}],74:[function(require,module,exports){
 var debug = require('cog/logger')('rtc-validator');
 var rePrefix = /^(?:a=)?candidate:/;
 var reIP = /^(\d+\.){3}\d+$/;
@@ -10312,26 +10396,4 @@ function validateParts(part, idx) {
   }
 }
 
-},{"cog/logger":47}],76:[function(require,module,exports){
-/**
-  ## zip
-
-  zip one array with other arrays
-
-  <<< examples/zip.js
-
-  ### zip todo
-
-  - tests
-
-**/
-module.exports = function() {
-  var targets = [].slice.call(arguments);
-
-  return function(item, index) {
-    return [item].concat(targets.map(function(val) {
-      return val[index];
-    }));
-  };
-};
-},{}]},{},[1]);
+},{"cog/logger":29}]},{},[1]);
